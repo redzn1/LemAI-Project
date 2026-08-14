@@ -1,0 +1,6 @@
+{
+  "name": "LemAI",
+  "description": "LemAI — Black Intelligence AI Operating Workspace with AI Coding System, 3-Model Architecture, Web Preview, Research, Canvas, and Firebase Auth",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

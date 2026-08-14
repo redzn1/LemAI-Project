@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <defs>
+    <linearGradient id="lemGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#888888" />
+    </linearGradient>
+  </defs>
+  <rect width="100" height="100" rx="22" fill="#0A0A0A" />
+  <rect x="2" y="2" width="96" height="96" rx="20" stroke="#222222" stroke-width="2" fill="none" />
+  <!-- Futuristic Geometric L / Diamond AI Symbol -->
+  <path d="M 28 24 L 44 24 L 44 60 L 72 60 L 72 76 L 28 76 Z" fill="url(#lemGradient)" />
+  <circle cx="72" cy="28" r="6" fill="#FFFFFF" />
+  <path d="M 58 42 L 72 28" stroke="#FFFFFF" stroke-width="2.5" stroke-dasharray="2 3" opacity="0.6" />
+</svg>
