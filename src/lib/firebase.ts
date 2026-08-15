@@ -12,6 +12,7 @@ import {
   updateProfile, 
   User 
 } from 'firebase/auth';
+import { getFirestore, Firestore } from 'firebase/firestore';
 import { UserProfile, UserRole } from '../types';
 import { firebaseConfig } from '../config/firebase';
 import { getUserTokenRecord, isDeveloperAccount, isAdminAccount, DEVELOPER_EMAIL, FREE_USER_TOKEN_LIMIT } from './tokenManager';
@@ -21,6 +22,7 @@ export { firebaseConfig };
 // Initialize Firebase safely
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
+export const db: Firestore = getFirestore(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 

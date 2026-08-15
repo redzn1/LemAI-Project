@@ -10,65 +10,62 @@ interface LoadingScreenProps {
 }
 
 const loadingSteps = [
-  { progress: 15, text: 'Initializing LemAI Neural Runtime...' },
-  { progress: 40, text: 'Synchronizing Authentication & Token Guard...' },
-  { progress: 70, text: 'Loading High-Performance Models (Flash & Pro)...' },
-  { progress: 90, text: 'Connecting IDE & Live Workspace Tools...' },
-  { progress: 100, text: 'LemAI System Ready' },
+  { progress: 15, text: 'Initializing LemAI Neural Runtime & Core Engine...' },
+  { progress: 35, text: 'Synchronizing Authentication, Token Guard & Memory Store...' },
+  { progress: 60, text: 'Connecting High-Speed Models (Flash-Lite, 1.0 Flash & 1.1 Pro)...' },
+  { progress: 85, text: 'Mounting Firebase Real-Time Collaboration & Sandboxed IDE...' },
+  { progress: 100, text: 'LemAI Black Intelligence Workspace Ready' },
 ];
 
 export const LoadingScreen: React.FC<LoadingScreenProps> = ({
   onComplete,
-  minDurationMs = 1200,
+  minDurationMs = 5000,
   statusMessage,
   isComplete = false,
 }) => {
   const [progress, setProgress] = useState(0);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [isExiting, setIsExiting] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   useEffect(() => {
     const startTime = Date.now();
-    const intervalTime = 30;
-    const totalSteps = minDurationMs / intervalTime;
-    let stepCount = 0;
+    const intervalTime = 40;
+    const targetDuration = Math.max(minDurationMs, 5000);
 
     const timer = setInterval(() => {
-      stepCount++;
+      const elapsed = Date.now() - startTime;
       const calculatedProgress = Math.min(
         100,
-        Math.round((stepCount / totalSteps) * 100)
+        Math.round((elapsed / targetDuration) * 100)
       );
 
-      setProgress((prev) => {
-        const next = Math.max(prev, calculatedProgress);
-        // Find corresponding step message
-        const matchedIndex = loadingSteps.findIndex((s) => next <= s.progress);
-        if (matchedIndex !== -1) {
-          setCurrentStepIndex(matchedIndex);
-        } else {
-          setCurrentStepIndex(loadingSteps.length - 1);
-        }
-        return next;
-      });
+      setElapsedSeconds(Math.min(5, Math.floor(elapsed / 1000) + 1));
+      setProgress(calculatedProgress);
 
-      if (stepCount >= totalSteps || isComplete) {
+      const matchedIndex = loadingSteps.findIndex((s) => calculatedProgress <= s.progress);
+      if (matchedIndex !== -1) {
+        setCurrentStepIndex(matchedIndex);
+      } else {
+        setCurrentStepIndex(loadingSteps.length - 1);
+      }
+
+      if (elapsed >= targetDuration) {
         clearInterval(timer);
         setProgress(100);
         setCurrentStepIndex(loadingSteps.length - 1);
         
-        // Brief pause at 100% before smooth fade exit
         setTimeout(() => {
           setIsExiting(true);
           setTimeout(() => {
             if (onComplete) onComplete();
-          }, 400);
+          }, 450);
         }, 300);
       }
     }, intervalTime);
 
     return () => clearInterval(timer);
-  }, [minDurationMs, isComplete, onComplete]);
+  }, [minDurationMs, onComplete]);
 
   return (
     <AnimatePresence>

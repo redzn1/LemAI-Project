@@ -773,11 +773,11 @@ export default function App() {
     localStorage.setItem(STORAGE_KEY_GUEST, 'true');
   };
 
-  // Render Modern Loading Screen on startup
+  // Render Modern Loading Screen on startup (5 second loading screen)
   if (initialLoading) {
     return (
       <LoadingScreen
-        minDurationMs={1400}
+        minDurationMs={5000}
         isComplete={!authLoading}
         onComplete={() => setInitialLoading(false)}
       />
@@ -887,7 +887,7 @@ export default function App() {
             />
           )}
 
-          {activeTool === 'coding' && <CodingWorkspace />}
+          {activeTool === 'coding' && <CodingWorkspace currentUser={user} />}
 
           {activeTool === 'note' && <NotePage onBackToApp={() => handleToolChange('chat')} />}
 

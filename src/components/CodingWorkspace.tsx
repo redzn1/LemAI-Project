@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { 
   FileCode, 
   Folder,
@@ -19,7 +19,7 @@ import {
   Tablet, 
   Eye, 
   Terminal, 
-  Code, 
+  Code as Code2, 
   ArrowRightLeft,
   Send,
   Loader2,
@@ -30,16 +30,34 @@ import {
   ChevronDown,
   Layers,
   Cpu,
-  Save
+  Save,
+  Users,
+  Radio,
+  Share2,
+  MessageSquare,
+  Compass,
+  UserCheck,
+  Globe
 } from 'lucide-react';
-import { CodingFile } from '../types';
+import { CodingFile, UserProfile } from '../types';
 import { resolveLanguage, triggerCodeDownload, isWebPreviewable } from '../utils/codeParser';
 import { generateCode, LEMAI_MODELS } from '../api/api';
 import { ScrollControls } from './ScrollControls';
+import { 
+  CollabSessionManager, 
+  Collaborator, 
+  CollabChatMessage, 
+  generateCollabRoomCode,
+  getRandomCollabColor 
+} from '../lib/collaboration';
 
 interface FolderNode {
   id: string;
   name: string;
+}
+
+interface CodingWorkspaceProps {
+  currentUser?: UserProfile | null;
 }
 
 const DEFAULT_PROJECT_FILES: CodingFile[] = [
@@ -65,7 +83,7 @@ const DEFAULT_PROJECT_FILES: CodingFile[] = [
       <span class="text-2xl">⚡</span>
     </div>
     <h1 class="text-2xl font-bold tracking-tight text-white mb-2">LemAI Code Engine</h1>
-    <p class="text-sm text-neutral-400 mb-6 font-mono">Real-time live sandboxed web execution by Limone Teams</p>
+    <p class="text-sm text-neutral-400 mb-6 font-mono">Real-time live collaborative web execution by Limone Teams</p>
     
     <div class="space-y-4">
       <div id="counter" class="text-4xl font-mono font-bold text-white">0</div>
@@ -127,7 +145,7 @@ const DEFAULT_FOLDERS: FolderNode[] = [
   { id: 'src-folder', name: 'src' },
 ];
 
-export const CodingWorkspace: React.FC = () => {
+export const CodingWorkspace: React.FC<CodingWorkspaceProps> = ({ currentUser }) => {
   const [files, setFiles] = useState<CodingFile[]>(DEFAULT_PROJECT_FILES);
   const [folders, setFolders] = useState<FolderNode[]>(DEFAULT_FOLDERS);
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({
@@ -150,9 +168,54 @@ export const CodingWorkspace: React.FC = () => {
   const [autoApplyGeneratedCode, setAutoApplyGeneratedCode] = useState(true);
   const [applyNotice, setApplyNotice] = useState<string | null>(null);
 
+  // ==========================================
+  // REAL-TIME COLLABORATION STATE
+  // ==========================================
+  const [isCollabActive, setIsCollabActive] = useState<boolean>(true);
+  const [collabRoomId, setCollabRoomId] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlRoom = urlParams.get('collab') || urlParams.get('room');
+      if (urlRoom) return urlRoom.toUpperCase();
+    }
+    return 'LEM-MAIN';
+  });
+  const [collaborators, setCollaborators] = useState<Record<string, Collaborator>>({});
+  const [collabMessages, setCollabMessages] = useState<CollabChatMessage[]>([]);
+  const [isCollabModalOpen, setIsCollabModalOpen] = useState(false);
+  const [isChatDrawerOpen, setIsChatDrawerOpen] = useState(false);
+  const [chatInputText, setChatInputText] = useState('');
+  const [joinRoomInput, setJoinRoomInput] = useState('');
+  const [copiedRoomCode, setCopiedRoomCode] = useState(false);
+  const [copiedRoomLink, setCopiedRoomLink] = useState(false);
+  const [cursorPosition, setCursorPosition] = useState<{ line: number; ch: number }>({ line: 1, ch: 1 });
+
+  const collabSessionRef = useRef<CollabSessionManager | null>(null);
   const fileTreeRef = useRef<HTMLDivElement>(null);
   const codeEditorRef = useRef<HTMLTextAreaElement>(null);
   const aiOutputRef = useRef<HTMLPreElement>(null);
+
+  // Effective user for collab identity
+  const effectiveUser: UserProfile = useMemo(() => {
+    if (currentUser) return currentUser;
+    let tempId = 'guest-dev';
+    if (typeof window !== 'undefined') {
+      const saved = sessionStorage.getItem('lemai_guest_dev_uid');
+      if (saved) {
+        tempId = saved;
+      } else {
+        tempId = 'guest-' + Math.random().toString(36).substring(2, 8);
+        sessionStorage.setItem('lemai_guest_dev_uid', tempId);
+      }
+    }
+    return {
+      uid: tempId,
+      username: 'guest_coder',
+      displayName: 'Guest Coder',
+      email: 'guest@limone.my.id',
+      provider: 'password',
+    };
+  }, [currentUser]);
 
   // Rename modal / inline state
   const [renamingItem, setRenamingItem] = useState<{ id: string; type: 'file' | 'folder'; currentName: string } | null>(null);
@@ -161,6 +224,72 @@ export const CodingWorkspace: React.FC = () => {
   const activeFile = useMemo(() => {
     return files.find(f => f.id === activeFileId) || files[0];
   }, [files, activeFileId]);
+
+  // Initialize Real-time Collab Manager
+  useEffect(() => {
+    if (!isCollabActive) {
+      if (collabSessionRef.current) {
+        collabSessionRef.current.destroy();
+        collabSessionRef.current = null;
+      }
+      return;
+    }
+
+    const session = new CollabSessionManager(
+      collabRoomId,
+      effectiveUser,
+      files,
+      (updatedRoom) => {
+        // Remote file sync
+        if (updatedRoom.files && updatedRoom.files.length > 0) {
+          setFiles((prevFiles) => {
+            const isDiff = JSON.stringify(prevFiles) !== JSON.stringify(updatedRoom.files);
+            if (isDiff) {
+              return updatedRoom.files;
+            }
+            return prevFiles;
+          });
+        }
+        setCollaborators(updatedRoom.collaborators || {});
+        if (updatedRoom.messages) {
+          setCollabMessages(updatedRoom.messages);
+        }
+      }
+    );
+
+    collabSessionRef.current = session;
+
+    return () => {
+      session.destroy();
+    };
+  }, [isCollabActive, collabRoomId, effectiveUser.uid]);
+
+  // Broadcast presence when active file changes
+  useEffect(() => {
+    if (isCollabActive && collabSessionRef.current) {
+      collabSessionRef.current.sendPresence(activeFileId, { line: cursorPosition.line, ch: cursorPosition.ch, index: 0 });
+    }
+  }, [activeFileId, isCollabActive]);
+
+  // Active collaborators who are NOT the current user
+  const remoteCollaborators = useMemo(() => {
+    return Object.values(collaborators).filter(c => c.id !== effectiveUser.uid);
+  }, [collaborators, effectiveUser.uid]);
+
+  // Collaborators currently viewing/editing the ACTIVE file
+  const activeFileCollaborators = useMemo(() => {
+    return remoteCollaborators.filter(c => c.activeFileId === activeFileId);
+  }, [remoteCollaborators, activeFileId]);
+
+  // Map of fileId -> array of collaborators on that file
+  const fileCollaboratorMap = useMemo(() => {
+    const map: Record<string, Collaborator[]> = {};
+    remoteCollaborators.forEach(c => {
+      if (!map[c.activeFileId]) map[c.activeFileId] = [];
+      map[c.activeFileId].push(c);
+    });
+    return map;
+  }, [remoteCollaborators]);
 
   // Combined web bundle for Sandboxed Preview (HTML + injected CSS and JS)
   const bundledSrcDoc = useMemo(() => {
@@ -208,12 +337,13 @@ export const CodingWorkspace: React.FC = () => {
 
   const applyCodeToActiveFile = (contentToApply: string) => {
     const cleanCode = extractCodeFromText(contentToApply);
-    setFiles(prev => prev.map(f => {
-      if (f.id === activeFileId) {
-        return { ...f, content: cleanCode };
-      }
-      return f;
-    }));
+    const updatedFiles = files.map(f => f.id === activeFileId ? { ...f, content: cleanCode } : f);
+    setFiles(updatedFiles);
+    
+    if (isCollabActive && collabSessionRef.current) {
+      collabSessionRef.current.updateFileContent(activeFileId, cleanCode);
+    }
+
     setPreviewKey(k => k + 1);
     setApplyNotice(`Kode AI langsung diterapkan ke ${activeFile.name}!`);
     setTimeout(() => setApplyNotice(null), 3500);
@@ -231,14 +361,45 @@ export const CodingWorkspace: React.FC = () => {
       folderId: null,
       content: cleanCode,
     };
-    setFiles(prev => [...prev, newFile]);
+    const updatedFiles = [...files, newFile];
+    setFiles(updatedFiles);
     setActiveFileId(newFileId);
+
+    if (isCollabActive && collabSessionRef.current) {
+      collabSessionRef.current.syncAllFiles(updatedFiles);
+    }
+
     setApplyNotice(`File baru "${newFileName}" berhasil dibuat dan diterapkan!`);
     setTimeout(() => setApplyNotice(null), 3500);
   };
 
   const handleUpdateContent = (newContent: string) => {
     setFiles(prev => prev.map(f => f.id === activeFileId ? { ...f, content: newContent } : f));
+    
+    // Broadcast real-time change to Firebase and peers
+    if (isCollabActive && collabSessionRef.current) {
+      collabSessionRef.current.updateFileContent(activeFileId, newContent);
+    }
+  };
+
+  // Cursor tracking for collaborative presence
+  const handleEditorCursorChange = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+    const textarea = e.currentTarget;
+    const pos = textarea.selectionStart;
+    const textBefore = textarea.value.substring(0, pos);
+    const lines = textBefore.split('\n');
+    const lineNum = lines.length;
+    const colNum = lines[lines.length - 1].length + 1;
+
+    setCursorPosition({ line: lineNum, ch: colNum });
+
+    if (isCollabActive && collabSessionRef.current) {
+      collabSessionRef.current.updateCursor(
+        activeFileId, 
+        { line: lineNum, ch: colNum, index: pos },
+        true
+      );
+    }
   };
 
   // Add File (to Root or specific folder)
@@ -247,252 +408,358 @@ export const CodingWorkspace: React.FC = () => {
     if (!fileName || !fileName.trim()) return;
 
     const trimmed = fileName.trim();
-    const lang = resolveLanguage(trimmed.split('.').pop());
+    const langInfo = resolveLanguage(trimmed.split('.').pop() || '');
+    const langId = langInfo.id;
 
     const newFile: CodingFile = {
-      id: `file-${Date.now()}`,
+      id: `file-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       name: trimmed,
-      language: lang.id,
+      language: langId,
+      isEntry: false,
       type: 'file',
-      folderId: folderId,
-      content: `// File: ${trimmed}\n// LemAI Code Workspace\n`,
+      folderId,
+      content: langId === 'html' 
+        ? `<!-- ${trimmed} -->\n<div class="p-4 bg-neutral-900 text-white rounded-xl">\n  <h1 class="text-xl font-bold">New Page</h1>\n</div>`
+        : `// ${trimmed}\n// LemAI Collaborative Workspace\n\nexport const init = () => {\n  console.log('${trimmed} ready');\n};\n`,
     };
 
-    setFiles(prev => [...prev, newFile]);
+    const updated = [...files, newFile];
+    setFiles(updated);
     setActiveFileId(newFile.id);
+
+    if (isCollabActive && collabSessionRef.current) {
+      collabSessionRef.current.syncAllFiles(updated);
+    }
   };
 
   // Add Folder
   const handleAddFolder = () => {
-    const folderName = prompt('Masukkan nama folder baru (contoh: components, utils, styles):');
+    const folderName = prompt('Masukkan nama folder baru (contoh: components, assets, utils):');
     if (!folderName || !folderName.trim()) return;
 
-    const trimmed = folderName.trim().replace(/[\/\\]/g, '');
-    const newFolder: FolderNode = {
-      id: `folder-${Date.now()}`,
-      name: trimmed,
-    };
-
-    setFolders(prev => [...prev, newFolder]);
-    setExpandedFolders(prev => ({ ...prev, [newFolder.id]: true }));
-  };
-
-  // Start Renaming Item
-  const startRename = (id: string, type: 'file' | 'folder', currentName: string) => {
-    setRenamingItem({ id, type, currentName });
-    setRenameInput(currentName);
-  };
-
-  // Submit Rename
-  const handleSaveRename = () => {
-    if (!renamingItem || !renameInput.trim()) {
-      setRenamingItem(null);
-      return;
-    }
-
-    const trimmed = renameInput.trim();
-    if (renamingItem.type === 'file') {
-      const lang = resolveLanguage(trimmed.split('.').pop());
-      setFiles(prev => prev.map(f => {
-        if (f.id === renamingItem.id) {
-          return {
-            ...f,
-            name: trimmed,
-            language: lang.id,
-          };
-        }
-        return f;
-      }));
-    } else {
-      setFolders(prev => prev.map(folder => {
-        if (folder.id === renamingItem.id) {
-          return { ...folder, name: trimmed };
-        }
-        return folder;
-      }));
-    }
-
-    setRenamingItem(null);
+    const newFolderId = `folder-${Date.now()}`;
+    setFolders(prev => [...prev, { id: newFolderId, name: folderName.trim() }]);
+    setExpandedFolders(prev => ({ ...prev, [newFolderId]: true }));
   };
 
   // Delete File
-  const handleDeleteFile = (id: string) => {
+  const handleDeleteFile = (fileId: string) => {
     if (files.length <= 1) {
-      alert('Project harus memiliki setidaknya satu file.');
+      alert('Minimal harus ada 1 file dalam project.');
       return;
     }
-    const targetFile = files.find(f => f.id === id);
-    if (confirm(`Hapus file "${targetFile?.name || 'ini'}" secara permanen?`)) {
-      setFiles(prev => prev.filter(f => f.id !== id));
-      if (activeFileId === id) {
-        const remaining = files.filter(f => f.id !== id);
-        setActiveFileId(remaining[0]?.id || '');
-      }
+    const fileToDelete = files.find(f => f.id === fileId);
+    if (!window.confirm(`Hapus file "${fileToDelete?.name}"?`)) return;
+
+    const remainingFiles = files.filter(f => f.id !== fileId);
+    setFiles(remainingFiles);
+    if (activeFileId === fileId) {
+      setActiveFileId(remainingFiles[0].id);
+    }
+
+    if (isCollabActive && collabSessionRef.current) {
+      collabSessionRef.current.syncAllFiles(remainingFiles);
     }
   };
 
   // Delete Folder
   const handleDeleteFolder = (folderId: string) => {
-    const folderFiles = files.filter(f => f.folderId === folderId);
-    const targetFolder = folders.find(f => f.id === folderId);
-    const msg = folderFiles.length > 0 
-      ? `Hapus folder "${targetFolder?.name}" beserta ${folderFiles.length} file di dalamnya?` 
-      : `Hapus folder "${targetFolder?.name}"?`;
-    
-    if (confirm(msg)) {
-      setFolders(prev => prev.filter(f => f.id !== folderId));
-      setFiles(prev => prev.filter(f => f.folderId !== folderId));
-      if (folderFiles.some(f => f.id === activeFileId)) {
-        const remaining = files.filter(f => f.folderId !== folderId);
-        if (remaining.length > 0) {
-          setActiveFileId(remaining[0].id);
-        }
-      }
+    const folderToDelete = folders.find(f => f.id === folderId);
+    if (!window.confirm(`Hapus folder "${folderToDelete?.name}" beserta seluruh isinya?`)) return;
+
+    setFolders(prev => prev.filter(f => f.id !== folderId));
+    const remainingFiles = files.filter(f => f.folderId !== folderId);
+    setFiles(remainingFiles);
+    if (remainingFiles.length > 0 && !remainingFiles.some(f => f.id === activeFileId)) {
+      setActiveFileId(remainingFiles[0].id);
+    }
+
+    if (isCollabActive && collabSessionRef.current) {
+      collabSessionRef.current.syncAllFiles(remainingFiles);
     }
   };
 
   const toggleFolder = (folderId: string) => {
-    setExpandedFolders(prev => ({
-      ...prev,
-      [folderId]: !prev[folderId],
-    }));
+    setExpandedFolders(prev => ({ ...prev, [folderId]: !prev[folderId] }));
+  };
+
+  // Rename handling
+  const startRename = (id: string, type: 'file' | 'folder', currentName: string) => {
+    setRenamingItem({ id, type, currentName });
+    setRenameInput(currentName);
+  };
+
+  const handleSaveRename = () => {
+    if (!renamingItem || !renameInput.trim()) return;
+    const newName = renameInput.trim();
+
+    if (renamingItem.type === 'file') {
+      const lang = resolveLanguage(newName.split('.').pop());
+      const updated = files.map(f => f.id === renamingItem.id ? { ...f, name: newName, language: lang } : f);
+      setFiles(updated);
+      if (isCollabActive && collabSessionRef.current) {
+        collabSessionRef.current.syncAllFiles(updated);
+      }
+    } else {
+      setFolders(prev => prev.map(fo => fo.id === renamingItem.id ? { ...fo, name: newName } : fo));
+    }
+    setRenamingItem(null);
+  };
+
+  // Execute AI action on code
+  const handleRunAiAction = async (actionType: 'optimize' | 'fix' | 'scaffold') => {
+    setIsAiLoading(true);
+    setAiOutput(null);
+
+    let promptText = '';
+    if (actionType === 'optimize') {
+      promptText = `Lakukan optimasi dan refactor pada kode ${activeFile.name} berikut agar lebih clean, modern, performant, dan bebas bug:\n\n\`\`\`${activeFile.language}\n${activeFile.content}\n\`\`\``;
+    } else if (actionType === 'fix') {
+      promptText = `Analisis dan perbaiki segala potensi error, bug, atau syntax mistake pada kode ${activeFile.name} berikut:\n\n\`\`\`${activeFile.language}\n${activeFile.content}\n\`\`\``;
+    } else {
+      promptText = `Kebutuhan pengguna: "${aiPrompt}".\nFile aktif: ${activeFile.name} (${activeFile.language}).\nKonten saat ini:\n\`\`\`${activeFile.language}\n${activeFile.content}\n\`\`\`\n\nBuat kode lengkap yang diperbarui dan siap dijalankan.`;
+    }
+
+    try {
+      const result = await generateCode(promptText, selectedCodingModel);
+      setAiOutput(result);
+
+      if (autoApplyGeneratedCode) {
+        applyCodeToActiveFile(result);
+      }
+    } catch (err: any) {
+      setAiOutput(`Terjadi kesalahan: ${err.message || 'Gagal memproses kode AI'}`);
+    } finally {
+      setIsAiLoading(false);
+      setAiPrompt('');
+    }
   };
 
   const handleCopyCode = async () => {
-    if (activeFile) {
-      await navigator.clipboard.writeText(activeFile.content);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
+    await navigator.clipboard.writeText(activeFile.content);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const handleDownloadActiveFile = () => {
-    if (activeFile) {
-      triggerCodeDownload(activeFile.name, activeFile.content);
-    }
+    triggerCodeDownload(activeFile.name, activeFile.content);
   };
 
-  const handleRunAiAction = async (action: 'explain' | 'fix' | 'optimize' | 'convert' | 'scaffold') => {
-    setIsAiLoading(true);
-    setAiOutput(null);
-    try {
-      const res = await generateCode({
-        modelId: selectedCodingModel,
-        action,
-        prompt: aiPrompt || `Perform ${action} on current file ${activeFile.name}`,
-        code: activeFile.content,
-        targetLanguage: activeFile.language,
-        files: files.map(f => ({ name: f.name, content: f.content })),
-      });
-      setAiOutput(res.text);
-
-      // Auto apply to active file if action generates or modifies code
-      if (autoApplyGeneratedCode && (action === 'fix' || action === 'optimize' || action === 'scaffold')) {
-        applyCodeToActiveFile(res.text);
+  // Jump to collaborator's active file & line
+  const handleFollowCollaborator = (collab: Collaborator) => {
+    if (collab.activeFileId) {
+      setActiveFileId(collab.activeFileId);
+      if (collab.cursor?.line && codeEditorRef.current) {
+        const textarea = codeEditorRef.current;
+        const lines = textarea.value.split('\n');
+        let charIndex = 0;
+        for (let i = 0; i < Math.min(lines.length, collab.cursor.line - 1); i++) {
+          charIndex += lines[i].length + 1;
+        }
+        textarea.focus();
+        textarea.setSelectionRange(charIndex, charIndex);
       }
-    } catch (err: any) {
-      setAiOutput(`Error: ${err.message}`);
-    } finally {
-      setIsAiLoading(false);
     }
   };
 
-  const isPreviewSupported = isWebPreviewable(activeFile.language, activeFile.content) || files.some(f => f.name.endsWith('.html'));
+  // Copy shareable room link
+  const handleCopyRoomLink = () => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const shareUrl = `${origin}/?collab=${collabRoomId}`;
+    navigator.clipboard.writeText(shareUrl);
+    setCopiedRoomLink(true);
+    setTimeout(() => setCopiedRoomLink(false), 2000);
+  };
+
+  const handleCopyRoomCode = () => {
+    navigator.clipboard.writeText(collabRoomId);
+    setCopiedRoomCode(true);
+    setTimeout(() => setCopiedRoomCode(false), 2000);
+  };
+
+  const handleJoinNewRoom = () => {
+    if (!joinRoomInput.trim()) return;
+    const clean = joinRoomInput.trim().toUpperCase();
+    setCollabRoomId(clean);
+    setIsCollabModalOpen(false);
+    setJoinRoomInput('');
+  };
+
+  const handleCreateNewRoomCode = () => {
+    const newCode = generateCollabRoomCode();
+    setCollabRoomId(newCode);
+    setIsCollabModalOpen(false);
+  };
+
+  const handleSendCollabChat = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInputText.trim() || !collabSessionRef.current) return;
+    collabSessionRef.current.sendChatMessage(chatInputText);
+    setChatInputText('');
+  };
+
+  const isPreviewSupported = isWebPreviewable(activeFile.name);
 
   return (
-    <div className="h-full flex flex-col bg-[#080808] overflow-hidden text-neutral-200">
-      {/* Top Action Bar */}
+    <div className="flex-1 flex flex-col h-full bg-[#080808] text-neutral-100 overflow-hidden font-['Plus_Jakarta_Sans',sans-serif]">
+      
+      {/* Top Coding Workspace Header & Collaboration Bar */}
       <div className="h-14 border-b border-neutral-800 bg-[#0d0d0d] px-4 flex items-center justify-between flex-shrink-0">
+        
+        {/* Left: Brand / Title & Model Selector */}
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
-            <Code className="w-5 h-5 text-white" />
-            <span className="font-bold text-sm text-white tracking-tight">AI Coding Workspace</span>
+            <div className="w-8 h-8 rounded-xl bg-neutral-900 border border-neutral-800 flex items-center justify-center text-emerald-400 shadow-sm">
+              <Code2 className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-sm text-white">LemAI IDE</span>
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-emerald-950/80 border border-emerald-800/80 text-emerald-400 font-bold">
+                  v2.5 Live
+                </span>
+              </div>
+              <p className="text-[10px] text-neutral-400 font-mono hidden sm:block">
+                Sandboxed Multi-file Runtime & Real-Time Collaboration
+              </p>
+            </div>
           </div>
-          <span className="hidden sm:inline-block px-2 py-0.5 rounded bg-neutral-800 text-[11px] font-mono text-neutral-400">
-            {files.length} Files • {folders.length} Folders
-          </span>
-        </div>
 
-        {/* Model Selector for Coding Workspace */}
-        <div className="flex items-center gap-2">
-          <div className="hidden lg:flex items-center gap-1.5 bg-neutral-900 border border-neutral-800 px-2.5 py-1 rounded-xl text-xs font-mono">
-            <Cpu className="w-3.5 h-3.5 text-neutral-400" />
-            <span className="text-neutral-500">Engine:</span>
+          <div className="hidden lg:block h-5 w-px bg-neutral-800" />
+
+          {/* Model Selector in Coding mode */}
+          <div className="hidden lg:flex items-center gap-1.5 bg-[#141414] border border-neutral-800 rounded-xl px-2.5 py-1 text-xs">
+            <Cpu className="w-3.5 h-3.5 text-amber-400" />
             <select
               value={selectedCodingModel}
               onChange={(e) => setSelectedCodingModel(e.target.value)}
-              className="bg-transparent text-white font-semibold focus:outline-none cursor-pointer"
+              className="bg-transparent text-neutral-200 text-xs font-mono focus:outline-none cursor-pointer"
             >
-              <option value="lemai-1.0-flash" className="bg-[#141414] text-white">
-                LemAI 1.0 Flash (GET)
-              </option>
-              <option value="lemai-flash-lite" className="bg-[#141414] text-white">
-                LemAI Flash-Lite (GET)
-              </option>
-              <option value="lemai-1.1-pro" className="bg-[#141414] text-neutral-300">
-                LemAI 1.1 Pro (POST SDK)
-              </option>
+              {LEMAI_MODELS.map((m) => (
+                <option key={m.id} value={m.id} className="bg-neutral-900 text-white">
+                  {m.name} ({m.badge})
+                </option>
+              ))}
             </select>
-            <span className={`text-[9px] px-1.5 py-0.2 rounded font-bold uppercase ${
-              selectedCodingModel === 'lemai-1.1-pro' ? 'bg-purple-950 text-purple-300 border border-purple-800' : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-            }`}>
-              {selectedCodingModel === 'lemai-1.1-pro' ? 'POST' : 'GET'}
-            </span>
+          </div>
+        </div>
+
+        {/* Center/Right: Real-Time Collaboration Hub Controls */}
+        <div className="flex items-center gap-2 sm:gap-3">
+          
+          {/* Live Collaboration Pill & Collaborators Avatars */}
+          <div className="flex items-center gap-2 bg-[#141414] border border-neutral-800/90 rounded-2xl p-1.5 shadow-inner">
+            
+            {/* Live Status Indicator */}
+            <button
+              onClick={() => setIsCollabModalOpen(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-xs font-mono transition border border-neutral-800"
+              title="Pengaturan Room Kolaborasi Real-Time"
+            >
+              <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+              <span className="font-bold text-white tracking-wider">{collabRoomId}</span>
+              <span className="hidden sm:inline text-[10px] text-emerald-400 font-semibold">
+                ({remoteCollaborators.length + 1} online)
+              </span>
+            </button>
+
+            {/* Collaborator Avatars Stack */}
+            <div className="flex items-center -space-x-1.5 pl-1 pr-1">
+              {/* Current User Avatar */}
+              <div 
+                className="relative w-6 h-6 rounded-full border-2 border-[#141414] bg-emerald-600 flex items-center justify-center text-[10px] font-bold text-white cursor-pointer shadow"
+                title={`Anda (${effectiveUser.displayName || effectiveUser.username}) - Mengedit ${activeFile.name}`}
+              >
+                {effectiveUser.displayName?.charAt(0).toUpperCase() || 'U'}
+                <span className="absolute bottom-0 right-0 w-1.5 h-1.5 rounded-full bg-emerald-400 ring-1 ring-black" />
+              </div>
+
+              {/* Remote Collaborators */}
+              {remoteCollaborators.slice(0, 4).map((collab) => (
+                <div
+                  key={collab.id}
+                  onClick={() => handleFollowCollaborator(collab)}
+                  style={{ backgroundColor: collab.color }}
+                  className="relative w-6 h-6 rounded-full border-2 border-[#141414] flex items-center justify-center text-[10px] font-bold text-white cursor-pointer hover:scale-110 transition shadow"
+                  title={`Klik untuk ikuti ${collab.displayName} (di file ${collab.activeFileName || 'index.html'})`}
+                >
+                  {collab.displayName.charAt(0).toUpperCase()}
+                  <span className="absolute bottom-0 right-0 w-1.5 h-1.5 rounded-full bg-emerald-400 ring-1 ring-black animate-pulse" />
+                </div>
+              ))}
+
+              {remoteCollaborators.length > 4 && (
+                <div className="w-6 h-6 rounded-full border-2 border-[#141414] bg-neutral-800 flex items-center justify-center text-[9px] font-mono text-neutral-300">
+                  +{remoteCollaborators.length - 4}
+                </div>
+              )}
+            </div>
+
+            {/* Live Team Chat / Pairing Drawer Toggle */}
+            <button
+              onClick={() => setIsChatDrawerOpen(prev => !prev)}
+              className={`p-1.5 rounded-xl text-xs transition relative ${
+                isChatDrawerOpen ? 'bg-emerald-600 text-white' : 'bg-neutral-900 text-neutral-400 hover:text-white'
+              }`}
+              title="Buka Chat / Diskusi Kode Tim Real-Time"
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+              {collabMessages.length > 0 && (
+                <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-emerald-400" />
+              )}
+            </button>
+          </div>
+
+          {/* Quick Share Button */}
+          <button
+            onClick={handleCopyRoomLink}
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-xs font-semibold text-neutral-300 hover:text-white border border-neutral-800 transition"
+            title="Salin Link Undangan Kolaborasi"
+          >
+            {copiedRoomLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Share2 className="w-3.5 h-3.5 text-neutral-400" />}
+            <span>{copiedRoomLink ? 'Link Tersalin' : 'Share Room'}</span>
+          </button>
+
+          {/* Top Quick Actions */}
+          <div className="hidden md:flex items-center gap-1.5">
+            <button
+              onClick={() => handleRunAiAction('optimize')}
+              disabled={isAiLoading}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-xs font-medium text-neutral-300 hover:text-white border border-neutral-800 transition"
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-400" />
+              <span>Optimize</span>
+            </button>
+            <button
+              onClick={handleDownloadActiveFile}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-neutral-200 text-black text-xs font-semibold transition shadow"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Export</span>
+            </button>
           </div>
 
           {/* Mobile Tab Switcher */}
           <div className="flex md:hidden bg-neutral-900 p-0.5 rounded-lg border border-neutral-800 text-xs">
             <button
               onClick={() => setMobileTab('editor')}
-              className={`px-3 py-1 rounded-md font-medium ${mobileTab === 'editor' ? 'bg-neutral-800 text-white' : 'text-neutral-400'}`}
+              className={`px-2.5 py-1 rounded-md font-medium ${mobileTab === 'editor' ? 'bg-neutral-800 text-white' : 'text-neutral-400'}`}
             >
               Editor
             </button>
             <button
               onClick={() => setMobileTab('preview')}
-              className={`px-3 py-1 rounded-md font-medium ${mobileTab === 'preview' ? 'bg-neutral-800 text-white' : 'text-neutral-400'}`}
+              className={`px-2.5 py-1 rounded-md font-medium ${mobileTab === 'preview' ? 'bg-neutral-800 text-white' : 'text-neutral-400'}`}
             >
               Preview
             </button>
-            <button
-              onClick={() => setMobileTab('ai')}
-              className={`px-3 py-1 rounded-md font-medium ${mobileTab === 'ai' ? 'bg-neutral-800 text-white' : 'text-neutral-400'}`}
-            >
-              AI Dev
-            </button>
           </div>
 
-          {/* Top Quick Actions */}
-          <div className="hidden sm:flex items-center gap-2">
-            <button
-              onClick={() => handleRunAiAction('optimize')}
-              disabled={isAiLoading}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-xs font-medium text-neutral-300 hover:text-white border border-neutral-800 transition"
-            >
-              <Zap className="w-3.5 h-3.5 text-amber-400" />
-              Optimize
-            </button>
-            <button
-              onClick={() => handleRunAiAction('fix')}
-              disabled={isAiLoading}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-xs font-medium text-neutral-300 hover:text-white border border-neutral-800 transition"
-            >
-              <Wrench className="w-3.5 h-3.5 text-blue-400" />
-              Fix Bugs
-            </button>
-            <button
-              onClick={handleDownloadActiveFile}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-neutral-200 text-black text-xs font-semibold transition"
-            >
-              <Download className="w-3.5 h-3.5" />
-              Export
-            </button>
-          </div>
         </div>
       </div>
 
       {/* Main Split Layout */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden relative">
         
         {/* Left: Files & Folders Explorer Sidebar */}
         <div className="w-56 sm:w-64 bg-[#0a0a0a] border-r border-neutral-800 flex flex-col flex-shrink-0">
@@ -559,7 +826,7 @@ export const CodingWorkspace: React.FC = () => {
                       <span className="text-[10px] text-neutral-500 font-mono">({folderFiles.length})</span>
                     </div>
 
-                    {/* Folder Action Buttons (Always accessible) */}
+                    {/* Folder Action Buttons */}
                     <div className="flex items-center gap-1">
                       <button
                         onClick={(e) => {
@@ -604,22 +871,38 @@ export const CodingWorkspace: React.FC = () => {
                       ) : (
                         folderFiles.map((file) => {
                           const isActive = file.id === activeFileId;
+                          const fileCollabs = fileCollaboratorMap[file.id] || [];
+
                           return (
                             <div
                               key={file.id}
                               onClick={() => setActiveFileId(file.id)}
-                              className={`group flex items-center justify-between px-2 py-1.5 rounded-lg text-xs cursor-pointer font-mono transition ${
+                              className={`group flex items-center justify-between px-2 py-1.5 rounded-lg text-xs cursor-pointer font-mono transition relative ${
                                 isActive
                                   ? 'bg-neutral-800 text-white font-semibold shadow-sm border border-neutral-700'
                                   : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200 border border-transparent'
                               }`}
                             >
-                              <div className="flex items-center gap-1.5 truncate">
+                              <div className="flex items-center gap-1.5 truncate flex-1">
                                 <FileCode className={`w-3.5 h-3.5 ${isActive ? 'text-emerald-400' : 'text-neutral-500'}`} />
                                 <span className="truncate">{file.name}</span>
                               </div>
 
-                              <div className="flex items-center gap-1">
+                              {/* Remote Collaborator Presence Badge on File */}
+                              {fileCollabs.length > 0 && (
+                                <div className="flex items-center -space-x-1 mr-1">
+                                  {fileCollabs.map(fc => (
+                                    <span
+                                      key={fc.id}
+                                      style={{ backgroundColor: fc.color }}
+                                      className="w-2 h-2 rounded-full ring-1 ring-black"
+                                      title={`${fc.displayName} sedang membuka file ini`}
+                                    />
+                                  ))}
+                                </div>
+                              )}
+
+                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -658,22 +941,38 @@ export const CodingWorkspace: React.FC = () => {
               </div>
               {files.filter(f => !f.folderId).map((file) => {
                 const isActive = file.id === activeFileId;
+                const fileCollabs = fileCollaboratorMap[file.id] || [];
+
                 return (
                   <div
                     key={file.id}
                     onClick={() => setActiveFileId(file.id)}
-                    className={`group flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs cursor-pointer font-mono transition ${
+                    className={`group flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs cursor-pointer font-mono transition relative ${
                       isActive
                         ? 'bg-neutral-800 text-white font-semibold shadow-sm border border-neutral-700'
                         : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200 border border-transparent'
                     }`}
                   >
-                    <div className="flex items-center gap-2 truncate">
+                    <div className="flex items-center gap-2 truncate flex-1">
                       <FileCode className={`w-3.5 h-3.5 ${isActive ? 'text-emerald-400' : 'text-neutral-500'}`} />
                       <span className="truncate">{file.name}</span>
                     </div>
 
-                    <div className="flex items-center gap-1">
+                    {/* Remote Collaborator Presence Badge */}
+                    {fileCollabs.length > 0 && (
+                      <div className="flex items-center -space-x-1 mr-1.5">
+                        {fileCollabs.map(fc => (
+                          <span
+                            key={fc.id}
+                            style={{ backgroundColor: fc.color }}
+                            className="w-2 h-2 rounded-full ring-1 ring-black"
+                            title={`${fc.displayName} sedang mengedit file ini`}
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -705,15 +1004,27 @@ export const CodingWorkspace: React.FC = () => {
         {/* Center: Code Editor Area */}
         <div className={`flex-1 flex flex-col bg-[#0c0c0c] min-w-0 ${mobileTab === 'editor' ? 'flex' : 'hidden md:flex'}`}>
           
-          {/* File Tab Bar */}
+          {/* File Tab Bar & Live Active Collaborator Presence Banner */}
           <div className="h-10 bg-[#111111] border-b border-neutral-800 flex items-center justify-between px-4">
-            <div className="flex items-center gap-2 text-xs font-mono text-neutral-300">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span className="font-semibold text-white">{activeFile.name}</span>
-              <span className="text-neutral-500">({activeFile.language})</span>
+            <div className="flex items-center gap-3 text-xs font-mono text-neutral-300 truncate">
+              <div className="flex items-center gap-1.5 truncate">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse flex-shrink-0" />
+                <span className="font-semibold text-white truncate">{activeFile.name}</span>
+                <span className="text-neutral-500 hidden sm:inline">({activeFile.language})</span>
+              </div>
+
+              {/* Indicating who else is in this active file */}
+              {activeFileCollaborators.length > 0 && (
+                <div className="hidden lg:flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-neutral-900 border border-neutral-800 text-[10px] text-neutral-400">
+                  <Users className="w-3 h-3 text-emerald-400" />
+                  <span>
+                    {activeFileCollaborators.map(c => c.displayName).join(', ')} juga di file ini
+                  </span>
+                </div>
+              )}
             </div>
 
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 flex-shrink-0">
               {/* Scroll Up/Down controls for long code files */}
               <ScrollControls containerRef={codeEditorRef} variant="inline" />
 
@@ -723,7 +1034,7 @@ export const CodingWorkspace: React.FC = () => {
                 title="Rename file aktif"
               >
                 <Edit2 className="w-3 h-3 text-amber-400" />
-                <span>Rename</span>
+                <span className="hidden sm:inline">Rename</span>
               </button>
 
               <button
@@ -732,7 +1043,7 @@ export const CodingWorkspace: React.FC = () => {
                 title="Hapus file aktif"
               >
                 <Trash2 className="w-3 h-3 text-red-400" />
-                <span>Hapus</span>
+                <span className="hidden sm:inline">Hapus</span>
               </button>
 
               <button
@@ -756,12 +1067,45 @@ export const CodingWorkspace: React.FC = () => {
             </div>
           )}
 
+          {/* Active Collaborator Cursor & Status Bar */}
+          {activeFileCollaborators.length > 0 && (
+            <div className="px-4 py-1 bg-neutral-900/60 border-b border-neutral-800/60 flex items-center gap-3 text-[11px] font-mono text-neutral-400 overflow-x-auto">
+              <span className="text-neutral-500 font-semibold flex items-center gap-1">
+                <Radio className="w-3 h-3 text-emerald-400" />
+                Live Peers:
+              </span>
+              {activeFileCollaborators.map(c => (
+                <div 
+                  key={c.id}
+                  onClick={() => handleFollowCollaborator(c)}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-neutral-800/80 border border-neutral-700 hover:border-neutral-500 cursor-pointer transition text-white"
+                >
+                  <span style={{ backgroundColor: c.color }} className="w-2 h-2 rounded-full" />
+                  <span className="font-semibold">{c.displayName}</span>
+                  {c.cursor?.line && (
+                    <span className="text-neutral-400 text-[10px]">
+                      :L{c.cursor.line}
+                    </span>
+                  )}
+                  {c.isTyping && (
+                    <span className="text-emerald-400 animate-pulse text-[10px]">
+                      (typing...)
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Editable Code Editor */}
           <div className="flex-1 relative flex overflow-hidden">
             <textarea
               ref={codeEditorRef}
               value={activeFile.content}
               onChange={(e) => handleUpdateContent(e.target.value)}
+              onKeyUp={handleEditorCursorChange}
+              onClick={handleEditorCursorChange}
+              onSelect={handleEditorCursorChange}
               className="w-full h-full bg-[#0c0c0c] text-neutral-100 p-4 font-mono text-sm leading-relaxed resize-none focus:outline-none border-0 selection:bg-neutral-700 scroll-smooth"
               spellCheck={false}
               autoCapitalize="none"
@@ -912,7 +1256,215 @@ export const CodingWorkspace: React.FC = () => {
             </div>
           )}
         </div>
+
+        {/* Live Team Pairing / Chat Drawer */}
+        {isChatDrawerOpen && (
+          <div className="absolute right-0 top-0 bottom-0 w-80 bg-[#101010] border-l border-neutral-800 shadow-2xl z-30 flex flex-col animate-in slide-in-from-right-4 duration-200">
+            <div className="p-3 border-b border-neutral-800 flex items-center justify-between bg-[#141414]">
+              <div className="flex items-center gap-2">
+                <MessageSquare className="w-4 h-4 text-emerald-400" />
+                <span className="text-xs font-bold text-white">Room Chat & Notes</span>
+              </div>
+              <button 
+                onClick={() => setIsChatDrawerOpen(false)}
+                className="text-neutral-400 hover:text-white text-xs p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Chat message list */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-3 font-mono text-xs">
+              {collabMessages.length === 0 ? (
+                <div className="text-center py-8 text-neutral-500">
+                  <Users className="w-8 h-8 mx-auto mb-2 text-neutral-700" />
+                  <p>Belum ada pesan.</p>
+                  <p className="text-[10px] text-neutral-600">Diskusikan kode atau tinggalkan catatan untuk tim.</p>
+                </div>
+              ) : (
+                collabMessages.map((msg) => {
+                  const isMe = msg.senderId === effectiveUser.uid;
+                  return (
+                    <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                      <div className="flex items-center gap-1.5 mb-1 text-[10px] text-neutral-400">
+                        <span style={{ color: msg.senderColor }} className="font-bold">
+                          {msg.senderName}
+                        </span>
+                        <span className="text-neutral-600">
+                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                      <div className={`p-2.5 rounded-xl max-w-[90%] text-xs ${
+                        isMe ? 'bg-emerald-700 text-white' : 'bg-neutral-800 text-neutral-200 border border-neutral-700'
+                      }`}>
+                        {msg.text}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Chat form */}
+            <form onSubmit={handleSendCollabChat} className="p-3 border-t border-neutral-800 bg-[#141414] flex gap-2">
+              <input
+                type="text"
+                value={chatInputText}
+                onChange={(e) => setChatInputText(e.target.value)}
+                placeholder="Ketik catatan / pesan tim..."
+                className="flex-1 bg-[#1c1c1c] border border-neutral-700 rounded-xl px-3 py-1.5 text-xs text-white placeholder-neutral-500 font-mono focus:outline-none focus:border-emerald-500"
+              />
+              <button
+                type="submit"
+                disabled={!chatInputText.trim()}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-xl text-xs font-bold transition shadow"
+              >
+                <Send className="w-3.5 h-3.5" />
+              </button>
+            </form>
+          </div>
+        )}
+
       </div>
+
+      {/* Real-time Collaboration Manager Modal */}
+      {isCollabModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-md bg-[#121212] border border-neutral-800 rounded-2xl p-6 shadow-2xl space-y-5">
+            
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-emerald-950/70 border border-emerald-800/80 flex items-center justify-center text-emerald-400">
+                  <Radio className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Real-Time Collaboration Hub</h3>
+                  <p className="text-[11px] text-neutral-400 font-mono">Firebase Real-Time Multi-User IDE</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsCollabModalOpen(false)}
+                className="text-neutral-400 hover:text-white text-xs p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Room Information & Code */}
+            <div className="p-4 rounded-xl bg-[#181818] border border-neutral-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-neutral-400 font-mono">Current Room Code:</span>
+                <span className="px-2.5 py-1 rounded-lg bg-emerald-950/80 border border-emerald-800 text-emerald-400 font-mono font-bold text-sm tracking-wider">
+                  {collabRoomId}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleCopyRoomCode}
+                  className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-xs font-semibold text-white transition border border-neutral-700"
+                >
+                  {copiedRoomCode ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedRoomCode ? 'Tersalin' : 'Salin Kode'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCopyRoomLink}
+                  className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white transition shadow"
+                >
+                  {copiedRoomLink ? <Check className="w-3.5 h-3.5 text-white" /> : <Share2 className="w-3.5 h-3.5" />}
+                  <span>{copiedRoomLink ? 'Link Tersalin' : 'Salin Link Undangan'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Active Members List */}
+            <div>
+              <h4 className="text-xs font-bold text-neutral-300 mb-2 font-mono flex items-center justify-between">
+                <span>Active Collaborators ({remoteCollaborators.length + 1})</span>
+                <span className="text-[10px] text-emerald-400 font-normal">● Live Synced</span>
+              </h4>
+              
+              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                {/* Current User */}
+                <div className="flex items-center justify-between p-2.5 rounded-xl bg-neutral-900 border border-neutral-800 text-xs font-mono">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
+                    <span className="text-white font-bold">{effectiveUser.displayName} (You)</span>
+                  </div>
+                  <span className="text-[10px] text-neutral-500">File: {activeFile.name}</span>
+                </div>
+
+                {/* Remote Users */}
+                {remoteCollaborators.map(c => (
+                  <div key={c.id} className="flex items-center justify-between p-2.5 rounded-xl bg-neutral-900/60 border border-neutral-800 text-xs font-mono">
+                    <div className="flex items-center gap-2">
+                      <span style={{ backgroundColor: c.color }} className="w-2.5 h-2.5 rounded-full ring-1 ring-black" />
+                      <span className="text-neutral-200">{c.displayName}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-neutral-400">File: {c.activeFileName || 'index.html'}</span>
+                      <button
+                        onClick={() => {
+                          handleFollowCollaborator(c);
+                          setIsCollabModalOpen(false);
+                        }}
+                        className="px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-[10px] text-emerald-400"
+                      >
+                        Ikuti
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Join or Create Another Room */}
+            <div className="pt-2 border-t border-neutral-800 space-y-3">
+              <label className="text-[11px] font-mono text-neutral-400 block">
+                Gabung ke Room Lain:
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={joinRoomInput}
+                  onChange={(e) => setJoinRoomInput(e.target.value)}
+                  placeholder="Masukkan Room Code (misal LEM-7492)"
+                  className="flex-1 bg-[#181818] border border-neutral-700 rounded-xl px-3 py-2 text-xs text-white font-mono uppercase focus:outline-none focus:border-white"
+                />
+                <button
+                  type="button"
+                  onClick={handleJoinNewRoom}
+                  disabled={!joinRoomInput.trim()}
+                  className="px-4 py-2 bg-white hover:bg-neutral-200 disabled:opacity-40 text-black text-xs font-bold rounded-xl transition"
+                >
+                  Gabung
+                </button>
+              </div>
+
+              <div className="flex justify-between items-center pt-2">
+                <button
+                  type="button"
+                  onClick={handleCreateNewRoomCode}
+                  className="text-xs text-emerald-400 hover:text-emerald-300 font-mono underline"
+                >
+                  + Buat Room Acak Baru
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsCollabModalOpen(false)}
+                  className="px-4 py-1.5 rounded-xl bg-neutral-800 text-xs text-neutral-300 hover:bg-neutral-700 transition font-mono"
+                >
+                  Tutup
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
 
       {/* Rename Modal Dialog */}
       {renamingItem && (
