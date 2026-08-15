@@ -1,6 +1,35 @@
-export type ActiveTool = 'chat' | 'coding' | 'research' | 'canvas' | 'image' | 'video' | 'settings' | 'note';
+export type ActiveTool = 'chat' | 'coding' | 'research' | 'canvas' | 'image' | 'video' | 'settings' | 'note' | 'openr';
 
 export type SystemModuleType = 'image' | 'video' | 'research' | 'canvas';
+
+export interface OpenRouterConfig {
+  apiKey: string;
+  selectedModel: string;
+  enabledAsPrimary: boolean;
+  temperature: number;
+  maxTokens: number;
+  topP?: number;
+  systemInstruction?: string;
+  siteUrl?: string;
+  siteName?: string;
+}
+
+export interface OpenRouterModelInfo {
+  id: string;
+  name: string;
+  description?: string;
+  context_length?: number;
+  pricing?: {
+    prompt?: string;
+    completion?: string;
+  };
+  architecture?: {
+    modality?: string;
+    tokenizer?: string;
+    instruct_type?: string;
+  };
+  isFree?: boolean;
+}
 
 export interface LemAIModel {
   id: string;
@@ -87,6 +116,7 @@ export interface UserProfile {
   displayName: string;
   bio?: string;
   photoURL?: string;
+  accessToken?: string;
   provider: 'google' | 'password';
   role?: UserRole;
   tokensRemaining?: number;

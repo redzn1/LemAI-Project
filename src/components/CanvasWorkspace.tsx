@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { 
   Layout, 
   Sparkles, 
@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { requestAI } from '../api/api';
+import { ScrollControls } from './ScrollControls';
 
 const DEFAULT_CANVAS_TEXT = `# LemAI System Architecture & Engineering Brief
 
@@ -51,6 +52,9 @@ export const CanvasWorkspace: React.FC = () => {
   const [copied, setCopied] = useState(false);
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [viewMode, setViewMode] = useState<'split' | 'edit' | 'preview'>('split');
+
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(content);
@@ -180,12 +184,16 @@ ${content}`,
           <div className="flex-1 flex flex-col bg-[#0a0a0a] border-r border-neutral-800 overflow-hidden">
             <div className="px-4 py-2 bg-[#121212] border-b border-neutral-800 text-xs font-mono text-neutral-400 flex items-center justify-between">
               <span>Markdown Source</span>
-              <span>{content.length} chars</span>
+              <div className="flex items-center gap-2">
+                <span>{content.length} chars</span>
+                <ScrollControls containerRef={textareaRef} variant="inline" />
+              </div>
             </div>
             <textarea
+              ref={textareaRef}
               value={content}
               onChange={(e) => setContent(e.target.value)}
-              className="flex-1 w-full bg-[#0a0a0a] text-neutral-100 p-4 font-mono text-sm leading-relaxed resize-none focus:outline-none"
+              className="flex-1 w-full bg-[#0a0a0a] text-neutral-100 p-4 font-mono text-sm leading-relaxed resize-none focus:outline-none scroll-smooth"
               spellCheck={false}
             />
           </div>
@@ -193,7 +201,8 @@ ${content}`,
 
         {/* Live Rendered Preview Area */}
         {(viewMode === 'split' || viewMode === 'preview') && (
-          <div className="flex-1 flex flex-col bg-[#0c0c0c] overflow-y-auto p-6 sm:p-8">
+          <div ref={previewRef} className="flex-1 flex flex-col bg-[#0c0c0c] overflow-y-auto p-6 sm:p-8 relative scroll-smooth">
+            <ScrollControls containerRef={previewRef} variant="floating" />
             <MarkdownRenderer content={content} />
           </div>
         )}

@@ -96,7 +96,9 @@ export function userToProfile(user: User): UserProfile {
   }
 
   const resolvedEmail = email.includes('@') ? email : formatUsernameToEmail(customUsername);
-  const tokenRecord = getUserTokenRecord(resolvedEmail, customUsername);
+  const isGoogle = user.providerData?.some(p => p.providerId === 'google.com') || email.includes('@gmail.com');
+  const provider: 'google' | 'password' = isGoogle ? 'google' : 'password';
+  const tokenRecord = getUserTokenRecord(resolvedEmail, customUsername, provider);
 
   return {
     uid: user.uid,
@@ -105,7 +107,8 @@ export function userToProfile(user: User): UserProfile {
     displayName: user.displayName || customUsername,
     bio: extraBio,
     photoURL: extraPhoto,
-    provider: user.providerData?.[0]?.providerId === 'google.com' ? 'google' : 'password',
+    accessToken: tokenRecord.accessToken,
+    provider,
     role: tokenRecord.role,
     tokensRemaining: tokenRecord.tokensRemaining,
     tokensLimit: tokenRecord.tokensLimit,

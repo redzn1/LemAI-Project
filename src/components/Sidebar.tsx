@@ -21,7 +21,8 @@ import {
   PinOff,
   Edit2,
   BookOpen,
-  Check
+  Check,
+  Globe
 } from 'lucide-react';
 import { ActiveTool, ChatSession, UserProfile } from '../types';
 import { formatTokenDisplay, getTokenStatus } from '../lib/tokenManager';
@@ -44,6 +45,7 @@ interface SidebarProps {
   onOpenAdminPanel?: () => void;
   onOpenFirebaseModal?: () => void;
   onOpenNote?: () => void;
+  onOpenCommandPalette?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -64,19 +66,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenAdminPanel,
   onOpenFirebaseModal,
   onOpenNote,
+  onOpenCommandPalette,
 }) => {
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameInput, setRenameInput] = useState('');
 
-  // Tools in Sidebar (Coding IDE + Notes & Changelog domain.com/note)
+  const isAdminOrDev = user?.role === 'developer' || user?.role === 'admin';
+  const tokenStatus = getTokenStatus(user?.email || '');
+
+  // Tools in Sidebar (Coding IDE + Notes & Changelog domain.com/note + OpenRouter domain.my.id/openr - Dev/Admin only)
   const tools = [
     { id: 'coding' as ActiveTool, name: 'Coding IDE', icon: Code2, badge: 'Sandbox' },
     { id: 'note' as ActiveTool, name: 'Notes & Changelog', icon: BookOpen, badge: 'v2.5' },
+    ...(isAdminOrDev ? [{ id: 'openr' as ActiveTool, name: 'OpenRouter Hub', icon: Globe, badge: 'Admin' }] : []),
   ];
-
-  const tokenStatus = getTokenStatus(user?.email || '');
-  const isAdminOrDev = user?.role === 'developer' || user?.role === 'admin';
 
   // Sort sessions: pinned sessions come first
   const sortedSessions = [...sessions].sort((a, b) => {
@@ -129,8 +133,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
 
-        {/* Action: New Chat Button */}
-        <div className="p-3 space-y-2">
+        {/* Action: New Chat & Command Palette Buttons */}
+        <div className="p-3 space-y-1.5">
           <button
             type="button"
             onClick={() => {
@@ -144,9 +148,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <span>New Chat</span>
             </div>
             <span className="text-[10px] font-mono text-neutral-500 bg-neutral-900 px-1.5 py-0.5 rounded border border-neutral-800">
-              ⌘K
+              ⌘N
             </span>
           </button>
+
+          {onOpenCommandPalette && (
+            <button
+              type="button"
+              onClick={onOpenCommandPalette}
+              className="w-full flex items-center justify-between px-3.5 py-2 rounded-xl bg-[#111111] hover:bg-neutral-800 text-neutral-300 hover:text-white border border-neutral-850 hover:border-neutral-700 text-xs font-medium transition-all duration-150 group"
+            >
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400 group-hover:text-amber-300 transition-colors" />
+                <span>Command Menu</span>
+              </div>
+              <span className="text-[10px] font-mono text-neutral-500 bg-neutral-900 px-1.5 py-0.5 rounded border border-neutral-800">
+                ⌘K
+              </span>
+            </button>
+          )}
 
           {/* Token Status Badge Card */}
           <div className="p-2.5 rounded-xl bg-[#111111] border border-neutral-800/80 text-[11px] font-mono">
@@ -413,18 +433,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 >
                   <BookOpen className="w-3.5 h-3.5" />
                   <span>Notes & Changelog (Limone)</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setProfileMenuOpen(false);
-                    onOpenFirebaseModal?.();
-                  }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-neutral-300 hover:bg-neutral-800 hover:text-white transition-colors"
-                >
-                  <Cloud className="w-3.5 h-3.5" />
-                  <span>Firebase & Vercel Pipeline</span>
                 </button>
 
                 <button

@@ -12,6 +12,17 @@ const PORT = 3000;
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+// Global CORS Middleware to allow requests from any preview/deployed URL
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE, PATCH');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, X-Requested-With');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
 // Lazy init Gemini SDK
 let aiClient: GoogleGenAI | null = null;
 function getAI(): GoogleGenAI {
@@ -275,32 +286,43 @@ app.all('/api/ai/chat', async (req, res) => {
       config.tools = [{ googleSearch: {} }];
     }
 
-    const response = await ai.models.generateContent({
-      model: upstreamModel,
-      contents: parts.length > 0 ? { parts } : { parts: [{ text: prompt }] },
-      config,
-    });
+    try {
+      const response = await ai.models.generateContent({
+        model: upstreamModel,
+        contents: parts.length > 0 ? { parts } : { parts: [{ text: prompt }] },
+        config,
+      });
 
-    const text = response.text || '';
-    const sources: Array<{ title: string; url: string }> = [];
+      const text = response.text || '';
+      const sources: Array<{ title: string; url: string }> = [];
 
-    // Extract grounding sources if available
-    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
-    if (groundingChunks && Array.isArray(groundingChunks)) {
-      for (const chunk of groundingChunks) {
-        if (chunk.web?.uri) {
-          sources.push({
-            title: chunk.web.title || chunk.web.uri,
-            url: chunk.web.uri,
-          });
+      // Extract grounding sources if available
+      const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+      if (groundingChunks && Array.isArray(groundingChunks)) {
+        for (const chunk of groundingChunks) {
+          if (chunk.web?.uri) {
+            sources.push({
+              title: chunk.web.title || chunk.web.uri,
+              url: chunk.web.uri,
+            });
+          }
         }
       }
-    }
 
-    res.json({ text, sources });
+      return res.json({ text, sources });
+    } catch (genAiErr: any) {
+      console.warn('Gemini generateContent quota/error, activating instant Mayzaa fallback:', genAiErr.message);
+      const fallbackText = await callMayzaaLemAI(modelId, prompt, history);
+      return res.json({ text: fallbackText, sources: [] });
+    }
   } catch (error: any) {
-    console.error('API /api/ai/chat error:', error);
-    res.status(500).json({ error: error.message || 'Failed to process AI request.' });
+    console.error('API /api/ai/chat error, attempting emergency fallback:', error);
+    try {
+      const emergencyText = await callMayzaaLemAI('lemai-1.0-flash', (req.body?.prompt as string) || 'Halo LemAI', []);
+      return res.json({ text: emergencyText, sources: [] });
+    } catch (fallbackError: any) {
+      res.status(500).json({ error: error.message || 'Failed to process AI request.' });
+    }
   }
 });
 
@@ -341,66 +363,371 @@ app.all('/api/ai/stream', async (req, res) => {
       }
     }
 
-    const ai = getAI();
-    const parts: any[] = [{ text: prompt || 'Hello LemAI' }];
+    try {
+      const ai = getAI();
+      const parts: any[] = [{ text: prompt || 'Hello LemAI' }];
 
-    if (Array.isArray(attachments)) {
-      for (const att of attachments) {
-        if (att.base64 && att.mimeType) {
-          parts.push({
-            inlineData: {
-              data: att.base64.replace(/^data:[^;]+;base64,/, ''),
-              mimeType: att.mimeType,
-            },
-          });
+      if (Array.isArray(attachments)) {
+        for (const att of attachments) {
+          if (att.base64 && att.mimeType) {
+            parts.push({
+              inlineData: {
+                data: att.base64.replace(/^data:[^;]+;base64,/, ''),
+                mimeType: att.mimeType,
+              },
+            });
+          }
         }
       }
-    }
 
-    const config: any = {
-      systemInstruction: systemInstruction || getLemAISystemInstruction(modelId),
-    };
+      const config: any = {
+        systemInstruction: systemInstruction || getLemAISystemInstruction(modelId),
+      };
 
-    if (modelId === 'lemai-1.1-pro') {
-      config.tools = [{ googleSearch: {} }];
-    }
-
-    const responseStream = await ai.models.generateContentStream({
-      model: upstreamModel,
-      contents: { parts },
-      config,
-    });
-
-    let extractedSources: Array<{ title: string; url: string }> = [];
-
-    for await (const chunk of responseStream) {
-      const textChunk = chunk.text;
-      if (textChunk) {
-        res.write(`data: ${JSON.stringify({ text: textChunk })}\n\n`);
+      if (modelId === 'lemai-1.1-pro') {
+        config.tools = [{ googleSearch: {} }];
       }
 
-      const gChunks = chunk.candidates?.[0]?.groundingMetadata?.groundingChunks;
-      if (gChunks && Array.isArray(gChunks)) {
-        for (const g of gChunks) {
-          if (g.web?.uri) {
-            extractedSources.push({
-              title: g.web.title || g.web.uri,
-              url: g.web.uri,
-            });
+      const responseStream = await ai.models.generateContentStream({
+        model: upstreamModel,
+        contents: { parts },
+        config,
+      });
+
+      let extractedSources: Array<{ title: string; url: string }> = [];
+
+      for await (const chunk of responseStream) {
+        const textChunk = chunk.text;
+        if (textChunk) {
+          res.write(`data: ${JSON.stringify({ text: textChunk })}\n\n`);
+        }
+
+        const gChunks = chunk.candidates?.[0]?.groundingMetadata?.groundingChunks;
+        if (gChunks && Array.isArray(gChunks)) {
+          for (const g of gChunks) {
+            if (g.web?.uri) {
+              extractedSources.push({
+                title: g.web.title || g.web.uri,
+                url: g.web.uri,
+              });
+            }
+          }
+        }
+      }
+
+      if (extractedSources.length > 0) {
+        res.write(`data: ${JSON.stringify({ sources: extractedSources })}\n\n`);
+      }
+
+      res.write('data: [DONE]\n\n');
+      return res.end();
+    } catch (geminiStreamErr: any) {
+      console.warn('Gemini stream failed/quota reached, streaming via Mayzaa fallback:', geminiStreamErr.message);
+      const fallbackText = await callMayzaaLemAI(modelId, prompt, history);
+      const tokens = fallbackText.split(/(?<=[ ,.\n!?])/);
+      for (const token of tokens) {
+        if (token) {
+          res.write(`data: ${JSON.stringify({ text: token })}\n\n`);
+          await new Promise((resolve) => setTimeout(resolve, 15));
+        }
+      }
+      res.write('data: [DONE]\n\n');
+      return res.end();
+    }
+  } catch (error: any) {
+    console.error('Streaming error:', error);
+    res.write(`data: ${JSON.stringify({ error: error.message || 'Stream generation failed' })}\n\n`);
+    res.end();
+  }
+});
+
+// ==========================================
+// 3.1 OPENROUTER API SUITE (domain.my.id/openr)
+// ==========================================
+
+// Verify OpenRouter API Key and fetch balance/key info
+app.post('/api/openrouter/verify-key', async (req, res) => {
+  try {
+    const apiKey = req.body?.apiKey || process.env.OPENROUTER_API_KEY || '';
+    if (!apiKey) {
+      return res.status(400).json({ error: 'API Key OpenRouter diperlukan.' });
+    }
+
+    const response = await fetch('https://openrouter.ai/api/v1/auth/key', {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'HTTP-Referer': 'https://domain.my.id/openr',
+        'X-Title': 'LemAI OpenRouter Dashboard',
+      },
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      return res.status(response.status).json({ 
+        valid: false, 
+        error: errData?.error?.message || `Gagal memverifikasi key (HTTP ${response.status})` 
+      });
+    }
+
+    const data: any = await response.json();
+    return res.json({
+      valid: true,
+      data: data.data || data,
+    });
+  } catch (error: any) {
+    console.error('OpenRouter verify error:', error);
+    res.status(500).json({ valid: false, error: error.message || 'Gagal terhubung ke OpenRouter.' });
+  }
+});
+
+// Fetch Available OpenRouter Models list
+app.all('/api/openrouter/models', async (req, res) => {
+  try {
+    const apiKey = (req.body?.apiKey as string) || (req.query?.apiKey as string) || process.env.OPENROUTER_API_KEY || '';
+    const headers: Record<string, string> = {
+      'HTTP-Referer': 'https://domain.my.id/openr',
+      'X-Title': 'LemAI OpenRouter Hub',
+    };
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+
+    const response = await fetch('https://openrouter.ai/api/v1/models', {
+      method: 'GET',
+      headers,
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenRouter models API returned ${response.status}`);
+    }
+
+    const data: any = await response.json();
+    const rawModels: any[] = data?.data || [];
+
+    const models = rawModels.map((m) => {
+      const isFree = m.id.includes(':free') || (m.pricing?.prompt === '0' && m.pricing?.completion === '0');
+      return {
+        id: m.id,
+        name: m.name || m.id,
+        description: m.description || '',
+        context_length: m.context_length || 4096,
+        pricing: m.pricing || { prompt: '0', completion: '0' },
+        architecture: m.architecture || {},
+        isFree,
+      };
+    });
+
+    res.json({ models, total: models.length });
+  } catch (error: any) {
+    console.warn('Failed to fetch dynamic models from OpenRouter, returning curated presets:', error.message);
+    
+    // Curated high-performance fallback models list
+    const fallbackModels = [
+      { id: 'deepseek/deepseek-chat', name: 'DeepSeek V3 (Chat)', isFree: false, context_length: 64000, description: 'Model reasoning dan percakapan canggih dengan efisiensi tinggi.' },
+      { id: 'deepseek/deepseek-r1:free', name: 'DeepSeek R1 (Free)', isFree: true, context_length: 64000, description: 'Model penalaran chain-of-thought gratis berkinerja tinggi.' },
+      { id: 'meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 70B Instruct', isFree: false, context_length: 128000, description: 'Model open-weight terkuat dari Meta untuk coding & instruksi kompleks.' },
+      { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B Instruct (Free)', isFree: true, context_length: 128000, description: 'Versi gratis Llama 3.3 70B dengan kuota komunitas.' },
+      { id: 'google/gemini-2.0-flash-001', name: 'Google Gemini 2.0 Flash', isFree: false, context_length: 1000000, description: 'Model multimodal generasi baru berkecepatan ultra tinggi.' },
+      { id: 'google/gemini-2.0-pro-exp-02-05:free', name: 'Google Gemini 2.0 Pro Experimental (Free)', isFree: true, context_length: 2000000, description: 'Model eksperimental tercanggih Google Gemini 2.0 Pro.' },
+      { id: 'anthropic/claude-3.5-sonnet', name: 'Anthropic Claude 3.5 Sonnet', isFree: false, context_length: 200000, description: 'Standar industri untuk coding, analisis dokumen, dan arsitektur software.' },
+      { id: 'qwen/qwen-2.5-coder-32b-instruct:free', name: 'Qwen 2.5 Coder 32B (Free)', isFree: true, context_length: 32768, description: 'Model spesialis coding & pemrograman yang sangat akurat.' },
+      { id: 'mistralai/mistral-7b-instruct:free', name: 'Mistral 7B Instruct (Free)', isFree: true, context_length: 32768, description: 'Model cepat dan ringan untuk prompt harian.' },
+    ];
+    res.json({ models: fallbackModels, total: fallbackModels.length });
+  }
+});
+
+// Chat Completion via OpenRouter
+app.post('/api/openrouter/chat', async (req, res) => {
+  try {
+    const { apiKey, model, prompt, messages, systemInstruction, temperature, maxTokens, topP } = req.body;
+    const finalApiKey = apiKey || process.env.OPENROUTER_API_KEY;
+
+    if (!finalApiKey) {
+      return res.status(400).json({ error: 'OpenRouter API Key diperlukan. Silakan set di dashboard /openr' });
+    }
+
+    const targetModel = model || 'deepseek/deepseek-chat';
+    
+    // Construct message payload
+    const formattedMessages: Array<{ role: string; content: string }> = [];
+    if (systemInstruction) {
+      formattedMessages.push({ role: 'system', content: systemInstruction });
+    } else {
+      formattedMessages.push({ 
+        role: 'system', 
+        content: 'Anda adalah LemAI Black Intelligence yang didukung oleh OpenRouter Engine. Jawablah dengan akurat, cerdas, terstruktur dan ramah.' 
+      });
+    }
+
+    if (Array.isArray(messages) && messages.length > 0) {
+      for (const m of messages) {
+        if (m.role && m.content) {
+          formattedMessages.push({ role: m.role, content: m.content });
+        }
+      }
+    } else if (prompt) {
+      formattedMessages.push({ role: 'user', content: prompt });
+    }
+
+    const payload: any = {
+      model: targetModel,
+      messages: formattedMessages,
+      temperature: typeof temperature === 'number' ? temperature : 0.7,
+      max_tokens: typeof maxTokens === 'number' ? maxTokens : 4096,
+    };
+    if (typeof topP === 'number') payload.top_p = topP;
+
+    const startTime = Date.now();
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${finalApiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://domain.my.id/openr',
+        'X-Title': 'LemAI OpenRouter Dashboard',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const latencyMs = Date.now() - startTime;
+
+    if (!response.ok) {
+      const errData: any = await response.json().catch(() => ({}));
+      return res.status(response.status).json({
+        error: errData?.error?.message || `OpenRouter API error (HTTP ${response.status})`,
+        status: response.status,
+      });
+    }
+
+    const data: any = await response.json();
+    const text = data.choices?.[0]?.message?.content || data.choices?.[0]?.text || '';
+    const reasoning = data.choices?.[0]?.message?.reasoning || null;
+
+    res.json({
+      text,
+      reasoning,
+      model: data.model || targetModel,
+      usage: data.usage || null,
+      latencyMs,
+      raw: data,
+    });
+  } catch (error: any) {
+    console.error('OpenRouter chat error:', error);
+    res.status(500).json({ error: error.message || 'Gagal memproses request OpenRouter.' });
+  }
+});
+
+// Streaming Chat via OpenRouter (SSE)
+app.post('/api/openrouter/stream', async (req, res) => {
+  try {
+    const { apiKey, model, prompt, messages, systemInstruction, temperature, maxTokens, topP } = req.body;
+    const finalApiKey = apiKey || process.env.OPENROUTER_API_KEY;
+
+    if (!finalApiKey) {
+      return res.status(400).json({ error: 'OpenRouter API Key diperlukan.' });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    const targetModel = model || 'deepseek/deepseek-chat';
+    
+    const formattedMessages: Array<{ role: string; content: string }> = [];
+    if (systemInstruction) {
+      formattedMessages.push({ role: 'system', content: systemInstruction });
+    } else {
+      formattedMessages.push({ 
+        role: 'system', 
+        content: 'Anda adalah LemAI Black Intelligence yang didukung oleh OpenRouter Engine. Jawablah dengan akurat, cerdas, terstruktur dan ramah.' 
+      });
+    }
+
+    if (Array.isArray(messages) && messages.length > 0) {
+      for (const m of messages) {
+        if (m.role && m.content) {
+          formattedMessages.push({ role: m.role, content: m.content });
+        }
+      }
+    } else if (prompt) {
+      formattedMessages.push({ role: 'user', content: prompt });
+    }
+
+    const payload: any = {
+      model: targetModel,
+      messages: formattedMessages,
+      temperature: typeof temperature === 'number' ? temperature : 0.7,
+      max_tokens: typeof maxTokens === 'number' ? maxTokens : 4096,
+      stream: true,
+    };
+    if (typeof topP === 'number') payload.top_p = topP;
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${finalApiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://domain.my.id/openr',
+        'X-Title': 'LemAI OpenRouter Dashboard',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const errData: any = await response.json().catch(() => ({}));
+      res.write(`data: ${JSON.stringify({ error: errData?.error?.message || `OpenRouter HTTP ${response.status}` })}\n\n`);
+      return res.end();
+    }
+
+    if (!response.body) {
+      res.write(`data: ${JSON.stringify({ error: 'Response body is empty' })}\n\n`);
+      return res.end();
+    }
+
+    // Pipe SSE stream from OpenRouter
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (trimmed === 'data: [DONE]') {
+          res.write('data: [DONE]\n\n');
+          continue;
+        }
+
+        if (trimmed.startsWith('data: ')) {
+          try {
+            const parsed = JSON.parse(trimmed.slice(6));
+            const deltaText = parsed.choices?.[0]?.delta?.content || '';
+            const deltaReasoning = parsed.choices?.[0]?.delta?.reasoning || '';
+            if (deltaText || deltaReasoning) {
+              res.write(`data: ${JSON.stringify({ text: deltaText, reasoning: deltaReasoning })}\n\n`);
+            }
+          } catch {
+            // Forward raw if parse fails
+            res.write(`${trimmed}\n\n`);
           }
         }
       }
     }
 
-    if (extractedSources.length > 0) {
-      res.write(`data: ${JSON.stringify({ sources: extractedSources })}\n\n`);
-    }
-
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (error: any) {
-    console.error('Streaming error:', error);
-    res.write(`data: ${JSON.stringify({ error: error.message || 'Stream generation failed' })}\n\n`);
+    console.error('OpenRouter stream error:', error);
+    res.write(`data: ${JSON.stringify({ error: error.message || 'Stream error' })}\n\n`);
     res.end();
   }
 });

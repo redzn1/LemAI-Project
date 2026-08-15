@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { 
   Image as ImageIcon, 
   Sparkles, 
@@ -10,12 +10,14 @@ import {
 } from 'lucide-react';
 import { generateImage } from '../api/api';
 import { GeneratedImage } from '../types';
+import { ScrollControls } from './ScrollControls';
 
 export const ImageGenWorkspace: React.FC = () => {
   const [prompt, setPrompt] = useState('');
   const [aspectRatio, setAspectRatio] = useState<'1:1' | '3:4' | '4:3' | '9:16' | '16:9'>('1:1');
   const [style, setStyle] = useState('Photorealistic Dark Minimalist');
   const [isLoading, setIsLoading] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [images, setImages] = useState<GeneratedImage[]>([
     {
       id: 'img-demo-1',
@@ -84,10 +86,13 @@ export const ImageGenWorkspace: React.FC = () => {
             Black Intelligence Visuals
           </span>
         </div>
+
+        <ScrollControls containerRef={containerRef} variant="inline" />
       </div>
 
       {/* Main Container */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6 max-w-6xl mx-auto w-full space-y-8">
+      <div ref={containerRef} className="flex-1 overflow-y-auto p-4 sm:p-6 max-w-6xl mx-auto w-full space-y-8 relative scroll-smooth">
+        <ScrollControls containerRef={containerRef} variant="floating" />
         {/* Generation Form */}
         <form onSubmit={handleGenerate} className="p-6 bg-[#0f0f0f] border border-neutral-800 rounded-2xl shadow-xl space-y-4">
           <div>

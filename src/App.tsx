@@ -15,16 +15,18 @@ import { CanvasWorkspace } from './components/CanvasWorkspace';
 import { ImageGenWorkspace } from './components/ImageGenWorkspace';
 import { VideoGenWorkspace } from './components/VideoGenWorkspace';
 import { NotePage } from './components/NotePage';
+import { OpenRouterDashboard } from './components/OpenRouterDashboard';
 import { AuthScreen } from './components/AuthScreen';
 import { SettingsModal } from './components/SettingsModal';
 import { AdminPanel } from './components/AdminPanel';
+import { CommandPalette } from './components/CommandPalette';
 import { FirebaseDeploymentModal } from './components/FirebaseDeploymentModal';
 import { LoadingScreen } from './components/LoadingScreen';
 import { subscribeToAuth, logout } from './lib/firebase';
 import { streamMessage, sendMessage } from './api/api';
 import { notifyResponseComplete } from './lib/notifications';
 import { getTokenStatus, deductTokensForResponse } from './lib/tokenManager';
-import { Menu, Sparkles, Terminal, Code2, Search, Layout, Image, Video, Shield, AlertTriangle } from 'lucide-react';
+import { Menu, Sparkles, Terminal, Code2, Search, Layout, Image, Video, Shield, AlertTriangle, Lock } from 'lucide-react';
 
 const STORAGE_KEY_SESSIONS = 'lemai_chat_sessions_v2';
 const STORAGE_KEY_MODEL = 'lemai_selected_model_v2';
@@ -42,6 +44,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [firebaseModalOpen, setFirebaseModalOpen] = useState(false);
   const [quotaExhaustedAlert, setQuotaExhaustedAlert] = useState<string | null>(null);
 
@@ -132,10 +135,13 @@ export default function App() {
     );
   };
 
-  // URL Route Sync (supports domain.com/note)
+  // URL Route Sync (supports domain.com/note and domain.my.id/openr)
   useEffect(() => {
     const syncRoute = () => {
-      if (window.location.pathname === '/note') {
+      const path = window.location.pathname;
+      if (path === '/openr' || path === '/openrouter') {
+        setActiveTool('openr');
+      } else if (path === '/note') {
         setActiveTool('note');
       }
     };
@@ -144,13 +150,94 @@ export default function App() {
     return () => window.removeEventListener('popstate', syncRoute);
   }, []);
 
+  // Global Keyboard Shortcut Manager (Ctrl+K / Cmd+K Command Palette, Ctrl+N New Chat, Ctrl+, Settings, Ctrl+1..8 Tools)
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+      const isModifier = isMac ? e.metaKey : e.ctrlKey;
+
+      // 1. Toggle Command Palette: Ctrl+K / Cmd+K
+      if (isModifier && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCommandPaletteOpen((prev) => !prev);
+        return;
+      }
+
+      // 2. Start New Chat: Ctrl+N / Cmd+N
+      if (isModifier && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        handleToolChange('chat');
+        handleNewChat();
+        setCommandPaletteOpen(false);
+        return;
+      }
+
+      // 3. Open Settings: Ctrl+, / Cmd+,
+      if (isModifier && e.key === ',') {
+        e.preventDefault();
+        setSettingsOpen(true);
+        setCommandPaletteOpen(false);
+        return;
+      }
+
+      // 4. Escape closes any active modal
+      if (e.key === 'Escape') {
+        if (commandPaletteOpen) {
+          setCommandPaletteOpen(false);
+        } else if (settingsOpen) {
+          setSettingsOpen(false);
+        } else if (adminPanelOpen) {
+          setAdminPanelOpen(false);
+        } else if (firebaseModalOpen) {
+          setFirebaseModalOpen(false);
+        }
+      }
+
+      // 5. Tool switching shortcuts (Ctrl+1 to Ctrl+8)
+      if (isModifier && !e.shiftKey && !e.altKey) {
+        if (e.key === '1') {
+          e.preventDefault();
+          handleToolChange('chat');
+        } else if (e.key === '2') {
+          e.preventDefault();
+          handleToolChange('coding');
+        } else if (e.key === '3') {
+          e.preventDefault();
+          handleToolChange('note');
+        } else if (e.key === '4') {
+          e.preventDefault();
+          handleToolChange('canvas');
+        } else if (e.key === '5') {
+          e.preventDefault();
+          handleToolChange('image');
+        } else if (e.key === '6') {
+          e.preventDefault();
+          handleToolChange('video');
+        } else if (e.key === '7') {
+          e.preventDefault();
+          handleToolChange('research');
+        } else if (e.key === '8') {
+          if (user?.role === 'developer' || user?.role === 'admin') {
+            e.preventDefault();
+            handleToolChange('openr');
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [commandPaletteOpen, settingsOpen, adminPanelOpen, firebaseModalOpen, user, selectedModelId]);
+
   const handleToolChange = (tool: ActiveTool) => {
     setActiveTool(tool);
     setSidebarOpen(false);
     if (tool === 'note') {
       window.history.pushState(null, '', '/note');
+    } else if (tool === 'openr') {
+      window.history.pushState(null, '', '/openr');
     } else {
-      if (window.location.pathname === '/note') {
+      if (window.location.pathname === '/note' || window.location.pathname === '/openr' || window.location.pathname === '/openrouter') {
         window.history.pushState(null, '', '/');
       }
     }
@@ -753,6 +840,7 @@ export default function App() {
         onOpenAdminPanel={() => setAdminPanelOpen(true)}
         onOpenFirebaseModal={() => setFirebaseModalOpen(true)}
         onOpenNote={() => handleToolChange('note')}
+        onOpenCommandPalette={() => setCommandPaletteOpen(true)}
       />
 
       {/* Main Workspace Frame */}
@@ -803,6 +891,30 @@ export default function App() {
 
           {activeTool === 'note' && <NotePage onBackToApp={() => handleToolChange('chat')} />}
 
+          {/* OpenRouter Hub: Restricted to Admin & Developer Only */}
+          {activeTool === 'openr' && (
+            user?.role === 'developer' || user?.role === 'admin' ? (
+              <OpenRouterDashboard onBackToApp={() => handleToolChange('chat')} />
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center p-6 text-center bg-[#0a0a0a] font-['Plus_Jakarta_Sans',sans-serif]">
+                <div className="w-16 h-16 rounded-3xl bg-amber-950/40 border border-amber-800/80 flex items-center justify-center text-amber-400 mb-4 shadow-xl">
+                  <Lock className="w-8 h-8" />
+                </div>
+                <h2 className="text-lg font-bold text-white mb-2">Akses Terbatas: OpenRouter Hub</h2>
+                <p className="text-xs text-neutral-400 max-w-md mb-6 leading-relaxed font-mono">
+                  OpenRouter Gateway Hub hanya dapat diakses secara privat oleh akun dengan peran <strong>Developer</strong> atau <strong>Admin</strong> terverifikasi dengan token otorisasi.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => handleToolChange('chat')}
+                  className="px-5 py-2.5 rounded-xl bg-white hover:bg-neutral-200 text-black font-semibold text-xs transition shadow-lg"
+                >
+                  Kembali ke Chat Workspace
+                </button>
+              </div>
+            )
+          )}
+
           {activeTool === 'research' && <ResearchWorkspace />}
 
           {activeTool === 'canvas' && <CanvasWorkspace />}
@@ -812,6 +924,18 @@ export default function App() {
           {activeTool === 'video' && <VideoGenWorkspace />}
         </div>
       </main>
+
+      {/* Global Command Palette (Ctrl+K / Cmd+K) */}
+      <CommandPalette
+        isOpen={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        onSelectTool={handleToolChange}
+        onNewChat={handleNewChat}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenAdminPanel={() => setAdminPanelOpen(true)}
+        onSelectModel={handleSelectModel}
+        currentUser={user}
+      />
 
       {/* Settings Modal */}
       <SettingsModal

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { 
   FileCode, 
   Folder,
@@ -35,6 +35,7 @@ import {
 import { CodingFile } from '../types';
 import { resolveLanguage, triggerCodeDownload, isWebPreviewable } from '../utils/codeParser';
 import { generateCode, LEMAI_MODELS } from '../api/api';
+import { ScrollControls } from './ScrollControls';
 
 interface FolderNode {
   id: string;
@@ -146,6 +147,12 @@ export const CodingWorkspace: React.FC = () => {
   const [aiPrompt, setAiPrompt] = useState('');
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [aiOutput, setAiOutput] = useState<string | null>(null);
+  const [autoApplyGeneratedCode, setAutoApplyGeneratedCode] = useState(true);
+  const [applyNotice, setApplyNotice] = useState<string | null>(null);
+
+  const fileTreeRef = useRef<HTMLDivElement>(null);
+  const codeEditorRef = useRef<HTMLTextAreaElement>(null);
+  const aiOutputRef = useRef<HTMLPreElement>(null);
 
   // Rename modal / inline state
   const [renamingItem, setRenamingItem] = useState<{ id: string; type: 'file' | 'folder'; currentName: string } | null>(null);
@@ -185,6 +192,50 @@ export const CodingWorkspace: React.FC = () => {
 
     return html;
   }, [files, activeFile]);
+
+  // Helper to extract clean raw code from AI markdown fences
+  const extractCodeFromText = (rawText: string): string => {
+    const codeBlockRegex = /```(?:[a-zA-Z0-9_-]+)?\n([\s\S]*?)```/g;
+    const matches = [...rawText.matchAll(codeBlockRegex)];
+    if (matches.length > 0) {
+      if (matches.length === 1) {
+        return matches[0][1].trim();
+      }
+      return matches.map(m => m[1].trim()).join('\n\n');
+    }
+    return rawText.trim();
+  };
+
+  const applyCodeToActiveFile = (contentToApply: string) => {
+    const cleanCode = extractCodeFromText(contentToApply);
+    setFiles(prev => prev.map(f => {
+      if (f.id === activeFileId) {
+        return { ...f, content: cleanCode };
+      }
+      return f;
+    }));
+    setPreviewKey(k => k + 1);
+    setApplyNotice(`Kode AI langsung diterapkan ke ${activeFile.name}!`);
+    setTimeout(() => setApplyNotice(null), 3500);
+  };
+
+  const handleCreateNewFileFromAi = (contentToSave: string) => {
+    const cleanCode = extractCodeFromText(contentToSave);
+    const newFileId = `file-${Date.now()}`;
+    const newFileName = `generated_${files.length + 1}.js`;
+    const newFile: CodingFile = {
+      id: newFileId,
+      name: newFileName,
+      language: 'javascript',
+      type: 'file',
+      folderId: null,
+      content: cleanCode,
+    };
+    setFiles(prev => [...prev, newFile]);
+    setActiveFileId(newFileId);
+    setApplyNotice(`File baru "${newFileName}" berhasil dibuat dan diterapkan!`);
+    setTimeout(() => setApplyNotice(null), 3500);
+  };
 
   const handleUpdateContent = (newContent: string) => {
     setFiles(prev => prev.map(f => f.id === activeFileId ? { ...f, content: newContent } : f));
@@ -270,7 +321,8 @@ export const CodingWorkspace: React.FC = () => {
       alert('Project harus memiliki setidaknya satu file.');
       return;
     }
-    if (confirm('Hapus file ini secara permanen?')) {
+    const targetFile = files.find(f => f.id === id);
+    if (confirm(`Hapus file "${targetFile?.name || 'ini'}" secara permanen?`)) {
       setFiles(prev => prev.filter(f => f.id !== id));
       if (activeFileId === id) {
         const remaining = files.filter(f => f.id !== id);
@@ -282,9 +334,10 @@ export const CodingWorkspace: React.FC = () => {
   // Delete Folder
   const handleDeleteFolder = (folderId: string) => {
     const folderFiles = files.filter(f => f.folderId === folderId);
+    const targetFolder = folders.find(f => f.id === folderId);
     const msg = folderFiles.length > 0 
-      ? `Hapus folder beserta ${folderFiles.length} file di dalamnya?` 
-      : 'Hapus folder ini?';
+      ? `Hapus folder "${targetFolder?.name}" beserta ${folderFiles.length} file di dalamnya?` 
+      : `Hapus folder "${targetFolder?.name}"?`;
     
     if (confirm(msg)) {
       setFolders(prev => prev.filter(f => f.id !== folderId));
@@ -332,6 +385,11 @@ export const CodingWorkspace: React.FC = () => {
         files: files.map(f => ({ name: f.name, content: f.content })),
       });
       setAiOutput(res.text);
+
+      // Auto apply to active file if action generates or modifies code
+      if (autoApplyGeneratedCode && (action === 'fix' || action === 'optimize' || action === 'scaffold')) {
+        applyCodeToActiveFile(res.text);
+      }
     } catch (err: any) {
       setAiOutput(`Error: ${err.message}`);
     } finally {
@@ -437,33 +495,43 @@ export const CodingWorkspace: React.FC = () => {
       <div className="flex-1 flex overflow-hidden">
         
         {/* Left: Files & Folders Explorer Sidebar */}
-        <div className="w-52 sm:w-56 bg-[#0a0a0a] border-r border-neutral-800 flex flex-col flex-shrink-0">
+        <div className="w-56 sm:w-64 bg-[#0a0a0a] border-r border-neutral-800 flex flex-col flex-shrink-0">
           
-          {/* Header Action Bar */}
-          <div className="p-2.5 border-b border-neutral-800/80 flex items-center justify-between">
-            <span className="text-[11px] font-mono font-semibold uppercase tracking-wider text-neutral-500">
-              Explorer
-            </span>
-            <div className="flex items-center gap-1">
+          {/* Header Action Bar with Prominent Add Buttons */}
+          <div className="p-3 border-b border-neutral-800 bg-[#0e0e0e] space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-neutral-400">
+                Explorer
+              </span>
+              <span className="text-[10px] font-mono text-neutral-500">
+                {files.length} files
+              </span>
+            </div>
+
+            {/* Prominent Action Buttons */}
+            <div className="grid grid-cols-2 gap-1.5">
               <button
                 onClick={() => handleAddFile(null)}
+                className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-xs font-semibold text-emerald-400 border border-emerald-950/80 hover:border-emerald-800 transition shadow-sm"
                 title="Tambah File Baru"
-                className="p-1 rounded-lg hover:bg-neutral-800 text-neutral-400 hover:text-white transition"
               >
                 <FilePlus className="w-3.5 h-3.5" />
+                <span>+ File</span>
               </button>
+
               <button
                 onClick={handleAddFolder}
+                className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-xs font-semibold text-amber-400 border border-amber-950/80 hover:border-amber-800 transition shadow-sm"
                 title="Tambah Folder Baru"
-                className="p-1 rounded-lg hover:bg-neutral-800 text-neutral-400 hover:text-white transition"
               >
                 <FolderPlus className="w-3.5 h-3.5" />
+                <span>+ Folder</span>
               </button>
             </div>
           </div>
 
           {/* Explorer Tree List */}
-          <div className="flex-1 overflow-y-auto p-2 space-y-1">
+          <div ref={fileTreeRef} className="flex-1 overflow-y-auto p-2 space-y-1 relative scroll-smooth">
             
             {/* 1. Folders List */}
             {folders.map((folder) => {
@@ -472,34 +540,34 @@ export const CodingWorkspace: React.FC = () => {
 
               return (
                 <div key={folder.id} className="space-y-0.5">
-                  <div className="group flex items-center justify-between px-2 py-1.5 rounded-lg text-xs font-mono text-neutral-300 hover:bg-neutral-900 cursor-pointer transition">
+                  <div className="group flex items-center justify-between px-2 py-1.5 rounded-lg text-xs font-mono text-neutral-300 hover:bg-neutral-900/80 cursor-pointer transition border border-transparent hover:border-neutral-800">
                     <div 
                       className="flex items-center gap-1.5 truncate flex-1"
                       onClick={() => toggleFolder(folder.id)}
                     >
                       {isExpanded ? (
-                        <ChevronDown className="w-3 h-3 text-neutral-500" />
+                        <ChevronDown className="w-3.5 h-3.5 text-neutral-400" />
                       ) : (
-                        <ChevronRight className="w-3 h-3 text-neutral-500" />
+                        <ChevronRight className="w-3.5 h-3.5 text-neutral-400" />
                       )}
                       {isExpanded ? (
-                        <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
+                        <FolderOpen className="w-4 h-4 text-amber-400" />
                       ) : (
-                        <Folder className="w-3.5 h-3.5 text-amber-400/80" />
+                        <Folder className="w-4 h-4 text-amber-400/80" />
                       )}
-                      <span className="font-medium text-neutral-200 truncate">{folder.name}</span>
-                      <span className="text-[10px] text-neutral-600">({folderFiles.length})</span>
+                      <span className="font-semibold text-neutral-200 truncate">{folder.name}</span>
+                      <span className="text-[10px] text-neutral-500 font-mono">({folderFiles.length})</span>
                     </div>
 
-                    {/* Folder Quick Actions */}
-                    <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity">
+                    {/* Folder Action Buttons (Always accessible) */}
+                    <div className="flex items-center gap-1">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           handleAddFile(folder.id);
                         }}
-                        title="Tambah file ke folder ini"
-                        className="p-1 rounded hover:bg-neutral-800 text-neutral-400 hover:text-white"
+                        title="Tambah file ke folder"
+                        className="p-1 rounded bg-neutral-800/80 hover:bg-emerald-950 hover:text-emerald-300 text-neutral-400 transition"
                       >
                         <Plus className="w-3 h-3" />
                       </button>
@@ -509,9 +577,9 @@ export const CodingWorkspace: React.FC = () => {
                           startRename(folder.id, 'folder', folder.name);
                         }}
                         title="Rename folder"
-                        className="p-1 rounded hover:bg-neutral-800 text-neutral-400 hover:text-white"
+                        className="p-1 rounded bg-neutral-800/80 hover:bg-amber-950 hover:text-amber-300 text-neutral-400 transition"
                       >
-                        <Edit2 className="w-2.5 h-2.5" />
+                        <Edit2 className="w-3 h-3" />
                       </button>
                       <button
                         onClick={(e) => {
@@ -519,16 +587,16 @@ export const CodingWorkspace: React.FC = () => {
                           handleDeleteFolder(folder.id);
                         }}
                         title="Hapus folder"
-                        className="p-1 rounded hover:bg-neutral-800 text-neutral-400 hover:text-red-400"
+                        className="p-1 rounded bg-neutral-800/80 hover:bg-red-950 hover:text-red-300 text-neutral-400 transition"
                       >
-                        <Trash2 className="w-2.5 h-2.5" />
+                        <Trash2 className="w-3 h-3" />
                       </button>
                     </div>
                   </div>
 
                   {/* Files inside this folder */}
                   {isExpanded && (
-                    <div className="pl-4 space-y-0.5 border-l border-neutral-800/80 ml-2.5 my-0.5">
+                    <div className="pl-3 space-y-0.5 border-l-2 border-neutral-800 ml-3 my-0.5">
                       {folderFiles.length === 0 ? (
                         <div className="py-1 px-2 text-[10px] font-mono text-neutral-600 italic">
                           (folder kosong)
@@ -542,25 +610,25 @@ export const CodingWorkspace: React.FC = () => {
                               onClick={() => setActiveFileId(file.id)}
                               className={`group flex items-center justify-between px-2 py-1.5 rounded-lg text-xs cursor-pointer font-mono transition ${
                                 isActive
-                                  ? 'bg-neutral-800 text-white font-semibold'
-                                  : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
+                                  ? 'bg-neutral-800 text-white font-semibold shadow-sm border border-neutral-700'
+                                  : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200 border border-transparent'
                               }`}
                             >
                               <div className="flex items-center gap-1.5 truncate">
-                                <FileCode className={`w-3.5 h-3.5 ${isActive ? 'text-white' : 'text-neutral-500'}`} />
+                                <FileCode className={`w-3.5 h-3.5 ${isActive ? 'text-emerald-400' : 'text-neutral-500'}`} />
                                 <span className="truncate">{file.name}</span>
                               </div>
 
-                              <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5">
+                              <div className="flex items-center gap-1">
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     startRename(file.id, 'file', file.name);
                                   }}
                                   title="Rename file"
-                                  className="p-1 rounded hover:bg-neutral-700 text-neutral-400 hover:text-white"
+                                  className="p-1 rounded hover:bg-neutral-700 text-neutral-400 hover:text-amber-300 transition"
                                 >
-                                  <Edit2 className="w-2.5 h-2.5" />
+                                  <Edit2 className="w-3 h-3" />
                                 </button>
                                 <button
                                   onClick={(e) => {
@@ -568,9 +636,9 @@ export const CodingWorkspace: React.FC = () => {
                                     handleDeleteFile(file.id);
                                   }}
                                   title="Hapus file"
-                                  className="p-1 rounded hover:bg-neutral-700 text-neutral-400 hover:text-red-400"
+                                  className="p-1 rounded hover:bg-neutral-700 text-neutral-400 hover:text-red-400 transition"
                                 >
-                                  <Trash2 className="w-2.5 h-2.5" />
+                                  <Trash2 className="w-3 h-3" />
                                 </button>
                               </div>
                             </div>
@@ -583,9 +651,9 @@ export const CodingWorkspace: React.FC = () => {
               );
             })}
 
-            {/* 2. Root Files List (folderId === null) */}
-            <div className="pt-1 space-y-0.5">
-              <div className="px-2 py-1 text-[10px] font-mono text-neutral-500 uppercase tracking-wider">
+            {/* 2. Root Files List */}
+            <div className="pt-2 space-y-0.5">
+              <div className="px-2 py-1 text-[10px] font-mono text-neutral-500 uppercase tracking-wider font-semibold">
                 Root Files
               </div>
               {files.filter(f => !f.folderId).map((file) => {
@@ -596,25 +664,25 @@ export const CodingWorkspace: React.FC = () => {
                     onClick={() => setActiveFileId(file.id)}
                     className={`group flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs cursor-pointer font-mono transition ${
                       isActive
-                        ? 'bg-neutral-800 text-white font-semibold'
-                        : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
+                        ? 'bg-neutral-800 text-white font-semibold shadow-sm border border-neutral-700'
+                        : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200 border border-transparent'
                     }`}
                   >
                     <div className="flex items-center gap-2 truncate">
-                      <FileCode className={`w-3.5 h-3.5 ${isActive ? 'text-white' : 'text-neutral-500'}`} />
+                      <FileCode className={`w-3.5 h-3.5 ${isActive ? 'text-emerald-400' : 'text-neutral-500'}`} />
                       <span className="truncate">{file.name}</span>
                     </div>
 
-                    <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1">
+                    <div className="flex items-center gap-1">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           startRename(file.id, 'file', file.name);
                         }}
                         title="Rename file"
-                        className="p-1 rounded hover:bg-neutral-700 text-neutral-400 hover:text-white"
+                        className="p-1 rounded hover:bg-neutral-700 text-neutral-400 hover:text-amber-300 transition"
                       >
-                        <Edit2 className="w-2.5 h-2.5" />
+                        <Edit2 className="w-3 h-3" />
                       </button>
                       <button
                         onClick={(e) => {
@@ -622,9 +690,9 @@ export const CodingWorkspace: React.FC = () => {
                           handleDeleteFile(file.id);
                         }}
                         title="Hapus file"
-                        className="p-1 rounded hover:bg-neutral-700 text-neutral-400 hover:text-red-400"
+                        className="p-1 rounded hover:bg-neutral-700 text-neutral-400 hover:text-red-400 transition"
                       >
-                        <Trash2 className="w-2.5 h-2.5" />
+                        <Trash2 className="w-3 h-3" />
                       </button>
                     </div>
                   </div>
@@ -640,36 +708,61 @@ export const CodingWorkspace: React.FC = () => {
           {/* File Tab Bar */}
           <div className="h-10 bg-[#111111] border-b border-neutral-800 flex items-center justify-between px-4">
             <div className="flex items-center gap-2 text-xs font-mono text-neutral-300">
-              <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
               <span className="font-semibold text-white">{activeFile.name}</span>
               <span className="text-neutral-500">({activeFile.language})</span>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
+              {/* Scroll Up/Down controls for long code files */}
+              <ScrollControls containerRef={codeEditorRef} variant="inline" />
+
               <button
                 onClick={() => startRename(activeFile.id, 'file', activeFile.name)}
-                className="flex items-center gap-1 text-xs text-neutral-400 hover:text-white transition px-2 py-1 rounded hover:bg-neutral-800"
-                title="Rename active file"
+                className="flex items-center gap-1 text-xs text-neutral-300 hover:text-white transition px-2.5 py-1 rounded-lg bg-neutral-800/80 hover:bg-neutral-700 border border-neutral-700 font-mono"
+                title="Rename file aktif"
               >
-                <Edit2 className="w-3 h-3" />
+                <Edit2 className="w-3 h-3 text-amber-400" />
                 <span>Rename</span>
               </button>
+
+              <button
+                onClick={() => handleDeleteFile(activeFile.id)}
+                className="flex items-center gap-1 text-xs text-neutral-300 hover:text-red-400 transition px-2 py-1 rounded-lg bg-neutral-800/80 hover:bg-red-950/40 border border-neutral-700 font-mono"
+                title="Hapus file aktif"
+              >
+                <Trash2 className="w-3 h-3 text-red-400" />
+                <span>Hapus</span>
+              </button>
+
               <button
                 onClick={handleCopyCode}
-                className="flex items-center gap-1 text-xs text-neutral-400 hover:text-white transition px-2 py-1 rounded hover:bg-neutral-800"
+                className="flex items-center gap-1 text-xs text-neutral-300 hover:text-white transition px-2.5 py-1 rounded-lg bg-neutral-800/80 hover:bg-neutral-700 border border-neutral-700 font-mono"
               >
-                {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copied ? 'Copied' : 'Copy'}</span>
+                {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-neutral-400" />}
+                <span>{copied ? 'Tersalin' : 'Salin'}</span>
               </button>
             </div>
           </div>
 
+          {/* Direct Apply Notification */}
+          {applyNotice && (
+            <div className="p-2.5 bg-emerald-950/90 border-b border-emerald-800 text-emerald-200 text-xs font-mono flex items-center justify-between animate-in fade-in">
+              <div className="flex items-center gap-2">
+                <Check className="w-4 h-4 text-emerald-400" />
+                <span>{applyNotice}</span>
+              </div>
+              <button onClick={() => setApplyNotice(null)} className="text-emerald-400 hover:text-white text-xs">✕</button>
+            </div>
+          )}
+
           {/* Editable Code Editor */}
           <div className="flex-1 relative flex overflow-hidden">
             <textarea
+              ref={codeEditorRef}
               value={activeFile.content}
               onChange={(e) => handleUpdateContent(e.target.value)}
-              className="w-full h-full bg-[#0c0c0c] text-neutral-100 p-4 font-mono text-sm leading-relaxed resize-none focus:outline-none border-0 selection:bg-neutral-700"
+              className="w-full h-full bg-[#0c0c0c] text-neutral-100 p-4 font-mono text-sm leading-relaxed resize-none focus:outline-none border-0 selection:bg-neutral-700 scroll-smooth"
               spellCheck={false}
               autoCapitalize="none"
               autoComplete="off"
@@ -677,24 +770,39 @@ export const CodingWorkspace: React.FC = () => {
           </div>
 
           {/* Bottom Quick AI Prompt Bar in Coding Engine */}
-          <div className="p-3 bg-[#111111] border-t border-neutral-800 flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-neutral-400 flex-shrink-0" />
-            <input
-              type="text"
-              value={aiPrompt}
-              onChange={(e) => setAiPrompt(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleRunAiAction('scaffold')}
-              placeholder={`Ask ${selectedCodingModel === 'lemai-1.1-pro' ? 'LemAI 1.1 Pro (POST)' : 'LemAI GET Engine'}: 'Add a dark mode toggle', 'Create a React timer', 'Refactor code'..`}
-              className="flex-1 bg-[#181818] border border-neutral-700/80 rounded-xl px-3 py-1.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-white font-mono"
-            />
-            <button
-              onClick={() => handleRunAiAction('scaffold')}
-              disabled={isAiLoading || !aiPrompt.trim()}
-              className="px-3.5 py-1.5 rounded-xl bg-white text-black text-xs font-semibold hover:bg-neutral-200 transition disabled:opacity-50 flex items-center gap-1.5"
-            >
-              {isAiLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-              <span>Generate ({selectedCodingModel === 'lemai-1.1-pro' ? 'POST' : 'GET'})</span>
-            </button>
+          <div className="p-3 bg-[#111111] border-t border-neutral-800 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <div className="flex items-center gap-2 flex-1">
+              <Sparkles className="w-4 h-4 text-amber-400 flex-shrink-0" />
+              <input
+                type="text"
+                value={aiPrompt}
+                onChange={(e) => setAiPrompt(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleRunAiAction('scaffold')}
+                placeholder={`Prompt AI: 'Tambahkan dark mode', 'Buat kalkulator', 'Refactor'...`}
+                className="w-full bg-[#181818] border border-neutral-700/80 rounded-xl px-3 py-1.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-white font-mono"
+              />
+            </div>
+
+            <div className="flex items-center gap-2 justify-between sm:justify-end">
+              <label className="flex items-center gap-1.5 text-[11px] font-mono text-neutral-400 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={autoApplyGeneratedCode}
+                  onChange={(e) => setAutoApplyGeneratedCode(e.target.checked)}
+                  className="rounded bg-neutral-800 border-neutral-700 text-emerald-500 focus:ring-0"
+                />
+                <span>Langsung Terapkan</span>
+              </label>
+
+              <button
+                onClick={() => handleRunAiAction('scaffold')}
+                disabled={isAiLoading || !aiPrompt.trim()}
+                className="px-3.5 py-1.5 rounded-xl bg-white text-black text-xs font-bold hover:bg-neutral-200 transition disabled:opacity-50 flex items-center gap-1.5 shadow-md"
+              >
+                {isAiLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                <span>Generate & Terapkan</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -774,12 +882,33 @@ export const CodingWorkspace: React.FC = () => {
 
           {/* AI Result Drawer if available */}
           {aiOutput && (
-            <div className="max-h-60 overflow-y-auto p-3 bg-[#111111] border-t border-neutral-800 text-xs font-mono text-neutral-300">
-              <div className="flex items-center justify-between pb-2 mb-2 border-b border-neutral-800 font-bold text-white">
-                <span>LemAI AI Response ({selectedCodingModel === 'lemai-1.1-pro' ? 'POST' : 'GET'})</span>
+            <div className="max-h-72 overflow-y-auto p-3.5 bg-[#111111] border-t border-neutral-800 text-xs font-mono text-neutral-300 space-y-2">
+              <div className="flex items-center justify-between pb-2 border-b border-neutral-800 font-bold text-white">
+                <span className="flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                  LemAI Response ({selectedCodingModel})
+                </span>
                 <button onClick={() => setAiOutput(null)} className="text-neutral-500 hover:text-white">✕</button>
               </div>
-              <pre className="whitespace-pre-wrap">{aiOutput}</pre>
+
+              <pre className="whitespace-pre-wrap bg-[#0c0c0c] p-2.5 rounded-lg border border-neutral-800 text-[11px] max-h-40 overflow-y-auto">{aiOutput}</pre>
+
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button
+                  onClick={() => applyCodeToActiveFile(aiOutput)}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 shadow"
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  <span>Terapkan ke {activeFile.name}</span>
+                </button>
+                <button
+                  onClick={() => handleCreateNewFileFromAi(aiOutput)}
+                  className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white rounded-lg font-medium text-xs flex items-center gap-1.5 border border-neutral-700"
+                >
+                  <FilePlus className="w-3.5 h-3.5" />
+                  <span>Buat Sebagai File Baru</span>
+                </button>
+              </div>
             </div>
           )}
         </div>

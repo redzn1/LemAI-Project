@@ -26,7 +26,8 @@ import {
   AlertCircle,
   Radio,
   Edit2,
-  RefreshCw
+  RefreshCw,
+  Globe
 } from 'lucide-react';
 import { Message, Attachment, LemAIModel, ActiveTool, SystemModuleType } from '../types';
 import { ModelSelector } from './ModelSelector';
@@ -34,6 +35,7 @@ import { MarkdownRenderer } from './MarkdownRenderer';
 import { ModernTypingIndicator } from './ModernTypingIndicator';
 import { LEMAI_MODELS } from '../api/api';
 import { soundEffects } from '../lib/notifications';
+import { ScrollControls } from './ScrollControls';
 
 interface ChatWorkspaceProps {
   messages: Message[];
@@ -79,6 +81,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   const [moduleToast, setModuleToast] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const moduleTrayRef = useRef<HTMLDivElement>(null);
@@ -318,8 +321,23 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
           />
         </div>
 
-        {messages.length > 0 && (
-          <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2">
+          {/* Scroll Controls in Top Bar */}
+          <ScrollControls containerRef={chatScrollRef} variant="inline" />
+
+          {onSelectTool && (
+            <button
+              type="button"
+              onClick={() => onSelectTool('openr')}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-950/40 hover:bg-indigo-900/60 border border-indigo-800/60 text-xs font-mono text-indigo-300 hover:text-white transition"
+              title="Buka OpenRouter Gateway Dashboard"
+            >
+              <Globe className="w-3.5 h-3.5 text-indigo-400" />
+              <span>/openr</span>
+            </button>
+          )}
+
+          {messages.length > 0 && (
             <button
               type="button"
               onClick={onClearHistory}
@@ -329,12 +347,15 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
               <Trash2 className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Bersihkan</span>
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Messages Stream Container */}
-      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 space-y-6">
+      <div ref={chatScrollRef} className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 space-y-6 relative scroll-smooth">
+        {messages.length > 2 && (
+          <ScrollControls containerRef={chatScrollRef} variant="floating" className="!bottom-28 !right-6" />
+        )}
         {messages.length === 0 ? (
           /* Empty State / Welcome Screen */
           <div className="max-w-2xl mx-auto mt-8 sm:mt-16 text-center space-y-6 animate-in fade-in duration-300">

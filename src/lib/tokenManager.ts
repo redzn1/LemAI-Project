@@ -5,20 +5,39 @@ export const RESET_CYCLE_DAYS = 7;
 export const RESET_CYCLE_MS = RESET_CYCLE_DAYS * 24 * 60 * 60 * 1000;
 
 export const DEVELOPER_EMAIL = 'developer@limone.my.id';
+export const DEVELOPER_TOKEN = 'lemai_root_developer_master';
 
 const STORAGE_KEY_TOKEN_PREFIX = 'lemai_tokens_v2_';
+const STORAGE_KEY_TOKEN_BY_TOKEN_PREFIX = 'lemai_by_token_';
 const STORAGE_KEY_USERS_REGISTRY = 'lemai_users_registry_v2';
+const STORAGE_KEY_ADMIN_TOKENS = 'lemai_admin_tokens_v2';
 const STORAGE_KEY_ADMINS_LIST = 'lemai_admins_list_v2';
+const STORAGE_KEY_DEV_TOKENS = 'lemai_dev_tokens_v2';
+const STORAGE_KEY_DEV_EMAILS = 'lemai_dev_emails_v2';
 
 export interface UserTokenRecord {
   email: string;
   username: string;
   role: UserRole;
+  accessToken: string;
   tokensRemaining: number;
   tokensLimit: number;
   lastResetTimestamp: number;
   totalTokensUsed: number;
   updatedAt: number;
+  provider?: 'password' | 'google' | 'guest';
+}
+
+/**
+ * Generate unique access token in format: lemai_ + 10 random alphanumeric characters
+ */
+export function generateUserAccessToken(): string {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let rand = '';
+  for (let i = 0; i < 10; i++) {
+    rand += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return `lemai_${rand}`;
 }
 
 /**
@@ -43,20 +62,66 @@ export function formatTokenDisplay(tokens: number): string {
 }
 
 /**
- * Checks if an email belongs to the Developer
+ * Checks if an identifier (email or token) belongs to a Developer (Root or Assigned)
  */
-export function isDeveloperAccount(email: string): boolean {
-  if (!email) return false;
-  const clean = email.trim().toLowerCase();
-  return clean === DEVELOPER_EMAIL.toLowerCase() || clean === 'developer' || clean.startsWith('developer@');
+export function isDeveloperAccount(identifier: string, token?: string): boolean {
+  if (!identifier && !token) return false;
+  const cleanId = identifier ? identifier.trim().toLowerCase() : '';
+  const cleanTok = token ? token.trim() : '';
+
+  // 1. Root Developer constants
+  if (
+    cleanId === DEVELOPER_EMAIL.toLowerCase() ||
+    cleanId === 'developer' ||
+    cleanId.startsWith('developer@') ||
+    cleanId === DEVELOPER_TOKEN.toLowerCase() ||
+    cleanTok === DEVELOPER_TOKEN
+  ) {
+    return true;
+  }
+
+  // 2. Check dynamic Developer Tokens list
+  try {
+    const devTokens: string[] = JSON.parse(localStorage.getItem(STORAGE_KEY_DEV_TOKENS) || '[]');
+    if (devTokens.includes(cleanTok) || devTokens.includes(cleanId)) {
+      return true;
+    }
+  } catch {}
+
+  // 3. Check dynamic Developer Emails list
+  try {
+    const devEmails: string[] = JSON.parse(localStorage.getItem(STORAGE_KEY_DEV_EMAILS) || '[]');
+    if (devEmails.includes(cleanId)) {
+      return true;
+    }
+  } catch {}
+
+  return false;
 }
 
 /**
- * Checks if an email belongs to an Admin
+ * Checks if an Access Token has Admin privileges
  */
-export function isAdminAccount(email: string): boolean {
-  if (!email) return false;
-  if (isDeveloperAccount(email)) return true;
+export function isAdminToken(token: string): boolean {
+  if (!token) return false;
+  const cleanToken = token.trim();
+  if (cleanToken === DEVELOPER_TOKEN) return true;
+  try {
+    const list: string[] = JSON.parse(localStorage.getItem(STORAGE_KEY_ADMIN_TOKENS) || '[]');
+    return list.includes(cleanToken);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Checks if an email belongs to an Admin (either via email list or token list)
+ */
+export function isAdminAccount(email: string, token?: string): boolean {
+  if (!email && !token) return false;
+  if (isDeveloperAccount(email) || (token && isDeveloperAccount(token))) return true;
+  if (token && isAdminToken(token)) return true;
+
   try {
     const list: string[] = JSON.parse(localStorage.getItem(STORAGE_KEY_ADMINS_LIST) || '[]');
     return list.includes(email.trim().toLowerCase());
@@ -66,18 +131,88 @@ export function isAdminAccount(email: string): boolean {
 }
 
 /**
- * Get or initialize token record for a user
+ * Lookup user token record by Access Token (lemai_xxxxxxxxxx)
  */
-export function getUserTokenRecord(email: string, username?: string): UserTokenRecord {
+export function getUserByAccessToken(token: string): UserTokenRecord | null {
+  if (!token) return null;
+  const cleanToken = token.trim();
+
+  // 1. Direct token storage lookup
+  try {
+    const direct = localStorage.getItem(STORAGE_KEY_TOKEN_BY_TOKEN_PREFIX + cleanToken);
+    if (direct) {
+      return JSON.parse(direct);
+    }
+  } catch (e) {
+    console.error('Error reading token direct:', e);
+  }
+
+  // 2. Scan users registry
+  try {
+    const registryStr = localStorage.getItem(STORAGE_KEY_USERS_REGISTRY);
+    if (registryStr) {
+      const registry = JSON.parse(registryStr);
+      for (const email of Object.keys(registry)) {
+        const item = registry[email];
+        if (item.accessToken === cleanToken) {
+          return getUserTokenRecord(email, item.username);
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Error scanning registry for token:', e);
+  }
+
+  return null;
+}
+
+/**
+ * Find user token record by either Access Token, Email, or Username
+ */
+export function findUserByTokenOrEmail(identifier: string): UserTokenRecord | null {
+  if (!identifier) return null;
+  const clean = identifier.trim();
+
+  // If starts with lemai_ or looks like an access token
+  if (clean.startsWith('lemai_')) {
+    const byToken = getUserByAccessToken(clean);
+    if (byToken) return byToken;
+  }
+
+  // Check direct email lookup
+  if (clean.includes('@')) {
+    return getUserTokenRecord(clean);
+  }
+
+  // Check registry by username or email
+  const allUsers = getAllRegisteredUsers();
+  const match = allUsers.find(
+    (u) =>
+      u.accessToken.toLowerCase() === clean.toLowerCase() ||
+      u.email.toLowerCase() === clean.toLowerCase() ||
+      u.username.toLowerCase() === clean.toLowerCase()
+  );
+  if (match) return match;
+
+  // Fallback as new email record
+  return getUserTokenRecord(clean);
+}
+
+/**
+ * Get or initialize token record for a user (Supports Google Auth, Email Auth, and Guests)
+ */
+export function getUserTokenRecord(
+  email: string,
+  username?: string,
+  provider?: 'password' | 'google' | 'guest'
+): UserTokenRecord {
   const cleanEmail = email ? email.trim().toLowerCase() : 'guest@limone.my.id';
   const isDev = isDeveloperAccount(cleanEmail);
-  const isAdmin = isAdminAccount(cleanEmail);
-  
-  const role: UserRole = isDev ? 'developer' : isAdmin ? 'admin' : 'user';
-  const key = STORAGE_KEY_TOKEN_PREFIX + cleanEmail;
   const now = Date.now();
 
+  const key = STORAGE_KEY_TOKEN_PREFIX + cleanEmail;
   let record: UserTokenRecord | null = null;
+
   try {
     const saved = localStorage.getItem(key);
     if (saved) {
@@ -87,19 +222,30 @@ export function getUserTokenRecord(email: string, username?: string): UserTokenR
     console.error('Error loading token record:', e);
   }
 
-  // If no existing record or weekly cycle expired, initialize / reset
+  // Determine role based on token & email
+  let currentToken = record?.accessToken || (isDev ? DEVELOPER_TOKEN : generateUserAccessToken());
+  const isAdmin = isAdminAccount(cleanEmail, currentToken);
+  const role: UserRole = isDev ? 'developer' : isAdmin ? 'admin' : record?.role || 'user';
+
+  // If no existing record, initialize
   if (!record) {
     record = {
       email: cleanEmail,
-      username: username || cleanEmail.split('@')[0],
+      username: username || cleanEmail.split('@')[0] || 'user',
       role,
+      accessToken: currentToken,
       tokensRemaining: isDev ? Infinity : FREE_USER_TOKEN_LIMIT,
       tokensLimit: FREE_USER_TOKEN_LIMIT,
       lastResetTimestamp: now,
       totalTokensUsed: 0,
       updatedAt: now,
+      provider: provider || (cleanEmail.includes('@gmail.com') ? 'google' : 'password'),
     };
   } else {
+    // Ensure accessToken exists on older records
+    if (!record.accessToken) {
+      record.accessToken = isDev ? DEVELOPER_TOKEN : generateUserAccessToken();
+    }
     // Check for 7-day weekly reset
     const elapsed = now - (record.lastResetTimestamp || now);
     if (!isDev && elapsed >= RESET_CYCLE_MS) {
@@ -107,10 +253,13 @@ export function getUserTokenRecord(email: string, username?: string): UserTokenR
       record.lastResetTimestamp = now;
       record.updatedAt = now;
     }
-    // Maintain role consistency
+    // Update role
     record.role = role;
     if (isDev) {
       record.tokensRemaining = Infinity;
+    }
+    if (provider) {
+      record.provider = provider;
     }
   }
 
@@ -120,23 +269,66 @@ export function getUserTokenRecord(email: string, username?: string): UserTokenR
 }
 
 /**
- * Save user token record
+ * Regenerate Access Token for a user
+ */
+export function regenerateUserAccessToken(email: string): string {
+  const cleanEmail = email ? email.trim().toLowerCase() : 'guest@limone.my.id';
+  const record = getUserTokenRecord(cleanEmail);
+  const newToken = isDeveloperAccount(cleanEmail) ? DEVELOPER_TOKEN : generateUserAccessToken();
+  
+  // Remove old token pointer if exists
+  if (record.accessToken) {
+    try {
+      localStorage.removeItem(STORAGE_KEY_TOKEN_BY_TOKEN_PREFIX + record.accessToken);
+    } catch {}
+  }
+
+  record.accessToken = newToken;
+  record.updatedAt = Date.now();
+  saveUserTokenRecord(record);
+  return newToken;
+}
+
+/**
+ * Save user token record (indexed by email and by accessToken)
  */
 export function saveUserTokenRecord(record: UserTokenRecord): void {
   try {
-    const key = STORAGE_KEY_TOKEN_PREFIX + record.email.toLowerCase();
+    const cleanEmail = record.email.toLowerCase();
+    const key = STORAGE_KEY_TOKEN_PREFIX + cleanEmail;
     localStorage.setItem(key, JSON.stringify(record));
+
+    // Also index by Access Token for instant token-based lookups
+    if (record.accessToken) {
+      localStorage.setItem(
+        STORAGE_KEY_TOKEN_BY_TOKEN_PREFIX + record.accessToken,
+        JSON.stringify(record)
+      );
+    }
 
     // Register user in users registry for Admin Panel lookup
     const registryStr = localStorage.getItem(STORAGE_KEY_USERS_REGISTRY);
-    const registry: Record<string, { email: string; username: string; role: UserRole; tokens: number; updatedAt: number }> = registryStr ? JSON.parse(registryStr) : {};
-    
-    registry[record.email.toLowerCase()] = {
+    const registry: Record<
+      string,
+      {
+        email: string;
+        username: string;
+        role: UserRole;
+        accessToken: string;
+        tokens: number;
+        updatedAt: number;
+        provider?: string;
+      }
+    > = registryStr ? JSON.parse(registryStr) : {};
+
+    registry[cleanEmail] = {
       email: record.email,
       username: record.username,
       role: record.role,
+      accessToken: record.accessToken,
       tokens: record.tokensRemaining === Infinity ? 999999999 : record.tokensRemaining,
       updatedAt: record.updatedAt,
+      provider: record.provider,
     };
 
     localStorage.setItem(STORAGE_KEY_USERS_REGISTRY, JSON.stringify(registry));
@@ -209,7 +401,7 @@ export function deductTokensForResponse(
 }
 
 /**
- * Get all registered users for Admin Panel
+ * Get all registered users for Admin Panel (Both Google and Email Auth users)
  */
 export function getAllRegisteredUsers(): UserTokenRecord[] {
   try {
@@ -217,7 +409,10 @@ export function getAllRegisteredUsers(): UserTokenRecord[] {
     if (!registryStr) return [];
     const registry = JSON.parse(registryStr);
     const emails = Object.keys(registry);
-    return emails.map((email) => getUserTokenRecord(email, registry[email].username));
+    return emails.map((email) => {
+      const item = registry[email];
+      return getUserTokenRecord(email, item.username, item.provider as any);
+    });
   } catch (e) {
     console.error('Error listing registered users:', e);
     return [];
@@ -225,7 +420,7 @@ export function getAllRegisteredUsers(): UserTokenRecord[] {
 }
 
 // ==========================================
-// ADMIN PANEL ACTIONS
+// TOKEN & ROLE MANAGEMENT BY ACCESS TOKEN (lemai_...)
 // ==========================================
 
 export interface AdminActionResult {
@@ -235,16 +430,28 @@ export interface AdminActionResult {
 }
 
 /**
- * 1. Add Token to User
+ * 1. Add Token to User by Access Token or Email
  */
-export function adminAddToken(targetEmail: string, amount: number, callerRole: UserRole): AdminActionResult {
+export function adminAddTokenByToken(
+  targetTokenOrId: string,
+  amount: number,
+  callerRole: UserRole
+): AdminActionResult {
   if (callerRole !== 'developer' && callerRole !== 'admin') {
     return { success: false, message: 'Akses ditolak. Anda bukan Admin atau Developer.' };
   }
-  if (!targetEmail) return { success: false, message: 'Email user target wajib diisi.' };
-  if (!amount || amount <= 0) return { success: false, message: 'Jumlah token harus lebih dari 0.' };
+  if (!targetTokenOrId || !targetTokenOrId.trim()) {
+    return { success: false, message: 'Token Akses target wajib diisi.' };
+  }
+  if (!amount || amount <= 0) {
+    return { success: false, message: 'Jumlah token harus lebih dari 0.' };
+  }
 
-  const record = getUserTokenRecord(targetEmail);
+  const record = findUserByTokenOrEmail(targetTokenOrId);
+  if (!record) {
+    return { success: false, message: `User dengan token "${targetTokenOrId}" tidak ditemukan.` };
+  }
+
   if (record.role === 'developer') {
     return { success: true, message: 'Akun Developer selalu memiliki Token Unlimited (∞).', record };
   }
@@ -255,22 +462,34 @@ export function adminAddToken(targetEmail: string, amount: number, callerRole: U
 
   return {
     success: true,
-    message: `Berhasil menambahkan ${amount.toLocaleString()} Token untuk ${targetEmail}. Saldo baru: ${record.tokensRemaining.toLocaleString()} Token.`,
+    message: `Berhasil menambahkan ${amount.toLocaleString()} Token untuk token ${record.accessToken} (${record.email}). Saldo: ${record.tokensRemaining.toLocaleString()} Token.`,
     record,
   };
 }
 
 /**
- * 2. Reduce Token from User
+ * 2. Reduce Token from User by Access Token or Email
  */
-export function adminReduceToken(targetEmail: string, amount: number, callerRole: UserRole): AdminActionResult {
+export function adminReduceTokenByToken(
+  targetTokenOrId: string,
+  amount: number,
+  callerRole: UserRole
+): AdminActionResult {
   if (callerRole !== 'developer' && callerRole !== 'admin') {
     return { success: false, message: 'Akses ditolak. Anda bukan Admin atau Developer.' };
   }
-  if (!targetEmail) return { success: false, message: 'Email user target wajib diisi.' };
-  if (!amount || amount <= 0) return { success: false, message: 'Jumlah token harus lebih dari 0.' };
+  if (!targetTokenOrId || !targetTokenOrId.trim()) {
+    return { success: false, message: 'Token Akses target wajib diisi.' };
+  }
+  if (!amount || amount <= 0) {
+    return { success: false, message: 'Jumlah token harus lebih dari 0.' };
+  }
 
-  const record = getUserTokenRecord(targetEmail);
+  const record = findUserByTokenOrEmail(targetTokenOrId);
+  if (!record) {
+    return { success: false, message: `User dengan token "${targetTokenOrId}" tidak ditemukan.` };
+  }
+
   if (record.role === 'developer') {
     return { success: false, message: 'Tidak dapat memotong token akun Developer.' };
   }
@@ -281,22 +500,34 @@ export function adminReduceToken(targetEmail: string, amount: number, callerRole
 
   return {
     success: true,
-    message: `Berhasil memotong ${amount.toLocaleString()} Token dari ${targetEmail}. Saldo tersisa: ${record.tokensRemaining.toLocaleString()} Token.`,
+    message: `Berhasil memotong ${amount.toLocaleString()} Token dari token ${record.accessToken} (${record.email}). Sisa: ${record.tokensRemaining.toLocaleString()} Token.`,
     record,
   };
 }
 
 /**
- * 3. Set Token for User
+ * 3. Set Token for User by Access Token or Email
  */
-export function adminSetToken(targetEmail: string, amount: number, callerRole: UserRole): AdminActionResult {
+export function adminSetTokenByToken(
+  targetTokenOrId: string,
+  amount: number,
+  callerRole: UserRole
+): AdminActionResult {
   if (callerRole !== 'developer' && callerRole !== 'admin') {
     return { success: false, message: 'Akses ditolak. Anda bukan Admin atau Developer.' };
   }
-  if (!targetEmail) return { success: false, message: 'Email user target wajib diisi.' };
-  if (amount < 0) return { success: false, message: 'Jumlah token tidak boleh negatif.' };
+  if (!targetTokenOrId || !targetTokenOrId.trim()) {
+    return { success: false, message: 'Token Akses target wajib diisi.' };
+  }
+  if (amount < 0) {
+    return { success: false, message: 'Jumlah token tidak boleh negatif.' };
+  }
 
-  const record = getUserTokenRecord(targetEmail);
+  const record = findUserByTokenOrEmail(targetTokenOrId);
+  if (!record) {
+    return { success: false, message: `User dengan token "${targetTokenOrId}" tidak ditemukan.` };
+  }
+
   if (record.role === 'developer') {
     return { success: true, message: 'Akun Developer selalu Unlimited (∞).', record };
   }
@@ -307,21 +538,30 @@ export function adminSetToken(targetEmail: string, amount: number, callerRole: U
 
   return {
     success: true,
-    message: `Saldo token untuk ${targetEmail} berhasil diset menjadi ${amount.toLocaleString()} Token.`,
+    message: `Saldo token untuk ${record.accessToken} (${record.email}) berhasil diset menjadi ${amount.toLocaleString()} Token.`,
     record,
   };
 }
 
 /**
- * 4. Remove / Reset Token for User
+ * 4. Remove / Reset Token for User by Access Token or Email
  */
-export function adminRemoveToken(targetEmail: string, callerRole: UserRole): AdminActionResult {
+export function adminRemoveTokenByToken(
+  targetTokenOrId: string,
+  callerRole: UserRole
+): AdminActionResult {
   if (callerRole !== 'developer' && callerRole !== 'admin') {
     return { success: false, message: 'Akses ditolak. Anda bukan Admin atau Developer.' };
   }
-  if (!targetEmail) return { success: false, message: 'Email user target wajib diisi.' };
+  if (!targetTokenOrId || !targetTokenOrId.trim()) {
+    return { success: false, message: 'Token Akses target wajib diisi.' };
+  }
 
-  const record = getUserTokenRecord(targetEmail);
+  const record = findUserByTokenOrEmail(targetTokenOrId);
+  if (!record) {
+    return { success: false, message: `User dengan token "${targetTokenOrId}" tidak ditemukan.` };
+  }
+
   if (record.role === 'developer') {
     return { success: false, message: 'Tidak dapat menghapus token akun Developer.' };
   }
@@ -332,39 +572,64 @@ export function adminRemoveToken(targetEmail: string, callerRole: UserRole): Adm
 
   return {
     success: true,
-    message: `Token untuk ${targetEmail} berhasil di-reset menjadi 0 Token.`,
+    message: `Token untuk ${record.accessToken} (${record.email}) berhasil di-reset menjadi 0 Token.`,
     record,
   };
 }
 
 /**
- * 5. Set Admin (Developer ONLY)
+ * 5. Set Admin Role by Access Token (Developer ONLY)
  */
-export function adminSetAdminRole(targetEmail: string, callerRole: UserRole): AdminActionResult {
+export function adminSetAdminRoleByToken(
+  targetTokenOrId: string,
+  callerRole: UserRole
+): AdminActionResult {
   if (callerRole !== 'developer') {
-    return { 
-      success: false, 
-      message: 'Akses Ditolak: Hanya Developer (developer@limone.my.id) yang memiliki hak untuk menetapkan Admin.' 
+    return {
+      success: false,
+      message: 'Akses Ditolak: Hanya Developer utama yang memiliki hak untuk menetapkan Admin.',
     };
   }
-  if (!targetEmail) return { success: false, message: 'Email user target wajib diisi.' };
-  const cleanEmail = targetEmail.trim().toLowerCase();
+  if (!targetTokenOrId || !targetTokenOrId.trim()) {
+    return { success: false, message: 'Token Akses target (lemai_...) wajib diisi.' };
+  }
+
+  const record = findUserByTokenOrEmail(targetTokenOrId);
+  if (!record) {
+    return { success: false, message: `User dengan token "${targetTokenOrId}" tidak ditemukan.` };
+  }
+
+  if (record.role === 'developer') {
+    return { success: false, message: 'Akun ini sudah merupakan Root Developer.' };
+  }
 
   try {
-    const list: string[] = JSON.parse(localStorage.getItem(STORAGE_KEY_ADMINS_LIST) || '[]');
-    if (!list.includes(cleanEmail)) {
-      list.push(cleanEmail);
-      localStorage.setItem(STORAGE_KEY_ADMINS_LIST, JSON.stringify(list));
+    // 1. Add Access Token to Admin Tokens list
+    const adminTokens: string[] = JSON.parse(
+      localStorage.getItem(STORAGE_KEY_ADMIN_TOKENS) || '[]'
+    );
+    if (!adminTokens.includes(record.accessToken)) {
+      adminTokens.push(record.accessToken);
+      localStorage.setItem(STORAGE_KEY_ADMIN_TOKENS, JSON.stringify(adminTokens));
     }
 
-    const record = getUserTokenRecord(cleanEmail);
+    // 2. Add Email to Admin Emails list for backward compatibility
+    const adminEmails: string[] = JSON.parse(
+      localStorage.getItem(STORAGE_KEY_ADMINS_LIST) || '[]'
+    );
+    if (!adminEmails.includes(record.email.toLowerCase())) {
+      adminEmails.push(record.email.toLowerCase());
+      localStorage.setItem(STORAGE_KEY_ADMINS_LIST, JSON.stringify(adminEmails));
+    }
+
+    // 3. Update Record
     record.role = 'admin';
     record.updatedAt = Date.now();
     saveUserTokenRecord(record);
 
     return {
       success: true,
-      message: `User ${targetEmail} berhasil ditetapkan sebagai Admin!`,
+      message: `Token "${record.accessToken}" (${record.email}) berhasil diangkat sebagai ADMIN!`,
       record,
     };
   } catch (e: any) {
@@ -373,38 +638,186 @@ export function adminSetAdminRole(targetEmail: string, callerRole: UserRole): Ad
 }
 
 /**
- * 6. Remove Admin (Developer ONLY)
+ * 6. Remove Admin Role by Access Token (Developer ONLY)
  */
-export function adminRemoveAdminRole(targetEmail: string, callerRole: UserRole): AdminActionResult {
+export function adminRemoveAdminRoleByToken(
+  targetTokenOrId: string,
+  callerRole: UserRole
+): AdminActionResult {
   if (callerRole !== 'developer') {
-    return { 
-      success: false, 
-      message: 'Akses Ditolak: Hanya Developer (developer@limone.my.id) yang memiliki hak untuk mencabut status Admin.' 
+    return {
+      success: false,
+      message: 'Akses Ditolak: Hanya Developer utama yang memiliki hak untuk mencabut status Admin.',
     };
   }
-  if (!targetEmail) return { success: false, message: 'Email user target wajib diisi.' };
-  const cleanEmail = targetEmail.trim().toLowerCase();
+  if (!targetTokenOrId || !targetTokenOrId.trim()) {
+    return { success: false, message: 'Token Akses target (lemai_...) wajib diisi.' };
+  }
 
-  if (isDeveloperAccount(cleanEmail)) {
+  const record = findUserByTokenOrEmail(targetTokenOrId);
+  if (!record) {
+    return { success: false, message: `User dengan token "${targetTokenOrId}" tidak ditemukan.` };
+  }
+
+  if (isDeveloperAccount(record.email) || record.accessToken === DEVELOPER_TOKEN) {
     return { success: false, message: 'Tidak dapat mencabut hak Developer utama.' };
   }
 
   try {
-    const list: string[] = JSON.parse(localStorage.getItem(STORAGE_KEY_ADMINS_LIST) || '[]');
-    const updatedList = list.filter((e) => e !== cleanEmail);
-    localStorage.setItem(STORAGE_KEY_ADMINS_LIST, JSON.stringify(updatedList));
+    // 1. Remove from Admin Tokens list
+    const adminTokens: string[] = JSON.parse(
+      localStorage.getItem(STORAGE_KEY_ADMIN_TOKENS) || '[]'
+    );
+    const updatedTokens = adminTokens.filter((t) => t !== record.accessToken);
+    localStorage.setItem(STORAGE_KEY_ADMIN_TOKENS, JSON.stringify(updatedTokens));
 
-    const record = getUserTokenRecord(cleanEmail);
+    // 2. Remove from Admin Emails list
+    const adminEmails: string[] = JSON.parse(
+      localStorage.getItem(STORAGE_KEY_ADMINS_LIST) || '[]'
+    );
+    const updatedEmails = adminEmails.filter((e) => e !== record.email.toLowerCase());
+    localStorage.setItem(STORAGE_KEY_ADMINS_LIST, JSON.stringify(updatedEmails));
+
+    // 3. Update Record
     record.role = 'user';
     record.updatedAt = Date.now();
     saveUserTokenRecord(record);
 
     return {
       success: true,
-      message: `Status Admin untuk ${targetEmail} berhasil dicabut. Akun kembali menjadi user biasa.`,
+      message: `Status Admin untuk token "${record.accessToken}" (${record.email}) berhasil dicabut. Akun kembali menjadi user biasa.`,
       record,
     };
   } catch (e: any) {
     return { success: false, message: `Gagal mencabut status admin: ${e.message}` };
   }
 }
+
+/**
+ * 7. Set Developer Role by Access Token (Developer ONLY)
+ */
+export function adminSetDevRoleByToken(
+  targetTokenOrId: string,
+  callerRole: UserRole
+): AdminActionResult {
+  if (callerRole !== 'developer') {
+    return {
+      success: false,
+      message: 'Akses Ditolak: Hanya Developer yang memiliki hak untuk menetapkan role Developer.',
+    };
+  }
+  if (!targetTokenOrId || !targetTokenOrId.trim()) {
+    return { success: false, message: 'Token Akses target (lemai_...) wajib diisi.' };
+  }
+
+  const record = findUserByTokenOrEmail(targetTokenOrId);
+  if (!record) {
+    return { success: false, message: `User dengan token "${targetTokenOrId}" tidak ditemukan.` };
+  }
+
+  try {
+    // 1. Add Access Token to Dev Tokens list
+    const devTokens: string[] = JSON.parse(
+      localStorage.getItem(STORAGE_KEY_DEV_TOKENS) || '[]'
+    );
+    if (!devTokens.includes(record.accessToken)) {
+      devTokens.push(record.accessToken);
+      localStorage.setItem(STORAGE_KEY_DEV_TOKENS, JSON.stringify(devTokens));
+    }
+
+    // 2. Add Email to Dev Emails list
+    const devEmails: string[] = JSON.parse(
+      localStorage.getItem(STORAGE_KEY_DEV_EMAILS) || '[]'
+    );
+    if (!devEmails.includes(record.email.toLowerCase())) {
+      devEmails.push(record.email.toLowerCase());
+      localStorage.setItem(STORAGE_KEY_DEV_EMAILS, JSON.stringify(devEmails));
+    }
+
+    // 3. Update Record to Developer with Unlimited Tokens
+    record.role = 'developer';
+    record.tokensRemaining = Infinity;
+    record.updatedAt = Date.now();
+    saveUserTokenRecord(record);
+
+    return {
+      success: true,
+      message: `Token "${record.accessToken}" (${record.email}) berhasil diangkat sebagai DEVELOPER (Unlimited Quota & Full Access)!`,
+      record,
+    };
+  } catch (e: any) {
+    return { success: false, message: `Gagal menetapkan Developer: ${e.message}` };
+  }
+}
+
+/**
+ * 8. Remove Developer Role by Access Token (Developer ONLY)
+ */
+export function adminRemoveDevRoleByToken(
+  targetTokenOrId: string,
+  callerRole: UserRole
+): AdminActionResult {
+  if (callerRole !== 'developer') {
+    return {
+      success: false,
+      message: 'Akses Ditolak: Hanya Developer yang memiliki hak untuk mencabut role Developer.',
+    };
+  }
+  if (!targetTokenOrId || !targetTokenOrId.trim()) {
+    return { success: false, message: 'Token Akses target (lemai_...) wajib diisi.' };
+  }
+
+  const record = findUserByTokenOrEmail(targetTokenOrId);
+  if (!record) {
+    return { success: false, message: `User dengan token "${targetTokenOrId}" tidak ditemukan.` };
+  }
+
+  // Prevent removing root developer
+  if (
+    record.email.toLowerCase() === DEVELOPER_EMAIL.toLowerCase() ||
+    record.accessToken === DEVELOPER_TOKEN
+  ) {
+    return { success: false, message: 'Tidak dapat mencabut hak Root Developer master.' };
+  }
+
+  try {
+    // 1. Remove from Dev Tokens list
+    const devTokens: string[] = JSON.parse(
+      localStorage.getItem(STORAGE_KEY_DEV_TOKENS) || '[]'
+    );
+    const updatedDevTokens = devTokens.filter((t) => t !== record.accessToken);
+    localStorage.setItem(STORAGE_KEY_DEV_TOKENS, JSON.stringify(updatedDevTokens));
+
+    // 2. Remove from Dev Emails list
+    const devEmails: string[] = JSON.parse(
+      localStorage.getItem(STORAGE_KEY_DEV_EMAILS) || '[]'
+    );
+    const updatedDevEmails = devEmails.filter((e) => e !== record.email.toLowerCase());
+    localStorage.setItem(STORAGE_KEY_DEV_EMAILS, JSON.stringify(updatedDevEmails));
+
+    // 3. Update Record back to User (or Admin if also listed)
+    const isAdmin = isAdminAccount(record.email, record.accessToken);
+    record.role = isAdmin ? 'admin' : 'user';
+    record.tokensRemaining = FREE_USER_TOKEN_LIMIT;
+    record.updatedAt = Date.now();
+    saveUserTokenRecord(record);
+
+    return {
+      success: true,
+      message: `Status Developer untuk token "${record.accessToken}" (${record.email}) berhasil dicabut. Role diubah menjadi ${record.role}.`,
+      record,
+    };
+  } catch (e: any) {
+    return { success: false, message: `Gagal mencabut status Developer: ${e.message}` };
+  }
+}
+
+// Backward-compatible alias exports
+export const adminAddToken = adminAddTokenByToken;
+export const adminReduceToken = adminReduceTokenByToken;
+export const adminSetToken = adminSetTokenByToken;
+export const adminRemoveToken = adminRemoveTokenByToken;
+export const adminSetAdminRole = adminSetAdminRoleByToken;
+export const adminRemoveAdminRole = adminRemoveAdminRoleByToken;
+export const adminSetDevRole = adminSetDevRoleByToken;
+export const adminRemoveDevRole = adminRemoveDevRoleByToken;
