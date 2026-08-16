@@ -4,10 +4,13 @@
   * {
     border-color: #222222;
   }
-  body {
+  html, body {
     background-color: #080808;
     color: #eaeaea;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    height: 100%;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
   }
 }
 

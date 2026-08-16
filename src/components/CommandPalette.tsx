@@ -42,6 +42,7 @@ interface CommandPaletteProps {
   onNewChat: () => void;
   onOpenSettings: () => void;
   onOpenAdminPanel?: () => void;
+  onOpenShortcutsModal?: () => void;
   onSelectModel?: (modelId: string) => void;
   currentUser: UserProfile | null;
 }
@@ -53,6 +54,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onNewChat,
   onOpenSettings,
   onOpenAdminPanel,
+  onOpenShortcutsModal,
   onSelectModel,
   currentUser,
 }) => {
@@ -97,6 +99,18 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
             onClose();
           }, 1200);
         }
+      },
+    },
+    {
+      id: 'action-shortcuts',
+      category: 'Actions',
+      title: 'Pintasan Keyboard (Cheat-sheet Overlay)',
+      subtitle: 'Tampilkan daftar lengkap shortcut sistem',
+      icon: Layout,
+      shortcut: '?',
+      action: () => {
+        onClose();
+        onOpenShortcutsModal?.();
       },
     },
     {

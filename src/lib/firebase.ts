@@ -1,4 +1,3 @@
-import { initializeApp, getApps, getApp } from 'firebase/app';
 import { 
   getAuth, 
   signInWithPopup, 
@@ -14,13 +13,13 @@ import {
 } from 'firebase/auth';
 import { getFirestore, Firestore } from 'firebase/firestore';
 import { UserProfile, UserRole } from '../types';
-import { firebaseConfig } from '../config/firebase';
+import { app, firebaseConfig } from '../config/firebase';
 import { getUserTokenRecord, isDeveloperAccount, isAdminAccount, DEVELOPER_EMAIL, FREE_USER_TOKEN_LIMIT } from './tokenManager';
+import { syncUserToRTDB, getRTDBUser } from './rtdb';
 
-export { firebaseConfig };
+export { app, firebaseConfig };
 
-// Initialize Firebase safely
-export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+// Initialize Firebase Auth & Firestore instances
 export const auth = getAuth(app);
 export const db: Firestore = getFirestore(app);
 export const googleProvider = new GoogleAuthProvider();
@@ -102,7 +101,7 @@ export function userToProfile(user: User): UserProfile {
   const provider: 'google' | 'password' = isGoogle ? 'google' : 'password';
   const tokenRecord = getUserTokenRecord(resolvedEmail, customUsername, provider);
 
-  return {
+  const profile: UserProfile = {
     uid: user.uid,
     username: customUsername,
     email: resolvedEmail,
@@ -117,6 +116,21 @@ export function userToProfile(user: User): UserProfile {
     lastResetTimestamp: tokenRecord.lastResetTimestamp,
     createdAt: Date.now(),
   };
+
+  // Asynchronously sync to RTDB
+  syncUserToRTDB(user.uid, {
+    email: resolvedEmail,
+    username: customUsername,
+    displayName: user.displayName || customUsername,
+    photoURL: extraPhoto,
+    provider,
+    role: tokenRecord.role,
+    accessToken: tokenRecord.accessToken,
+    tokensRemaining: tokenRecord.tokensRemaining,
+    tokensLimit: tokenRecord.tokensLimit,
+  }).catch(() => {});
+
+  return profile;
 }
 
 /**
@@ -168,7 +182,14 @@ export async function updateUserProfileData(updates: {
   }
 
   if (currentUser) {
-    return userToProfile(currentUser);
+    const p = userToProfile(currentUser);
+    syncUserToRTDB(currentUser.uid, {
+      displayName: updates.displayName,
+      bio: updates.bio,
+      photoURL: updates.photoURL,
+      username: updates.username,
+    }).catch(() => {});
+    return p;
   }
 
   return {

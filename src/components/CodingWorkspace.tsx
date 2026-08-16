@@ -494,8 +494,8 @@ export const CodingWorkspace: React.FC<CodingWorkspaceProps> = ({ currentUser })
     const newName = renameInput.trim();
 
     if (renamingItem.type === 'file') {
-      const lang = resolveLanguage(newName.split('.').pop());
-      const updated = files.map(f => f.id === renamingItem.id ? { ...f, name: newName, language: lang } : f);
+      const lang = resolveLanguage(newName.split('.').pop()).id;
+      const updated: CodingFile[] = files.map(f => f.id === renamingItem.id ? { ...f, name: newName, language: lang } : f);
       setFiles(updated);
       if (isCollabActive && collabSessionRef.current) {
         collabSessionRef.current.syncAllFiles(updated);
@@ -521,11 +521,18 @@ export const CodingWorkspace: React.FC<CodingWorkspaceProps> = ({ currentUser })
     }
 
     try {
-      const result = await generateCode(promptText, selectedCodingModel);
-      setAiOutput(result);
+      const result = await generateCode({
+        modelId: selectedCodingModel,
+        action: actionType,
+        prompt: promptText,
+        code: activeFile.content,
+        targetLanguage: activeFile.language,
+      });
+      const outputText = result.code || result.text || '';
+      setAiOutput(outputText);
 
-      if (autoApplyGeneratedCode) {
-        applyCodeToActiveFile(result);
+      if (autoApplyGeneratedCode && outputText) {
+        applyCodeToActiveFile(outputText);
       }
     } catch (err: any) {
       setAiOutput(`Terjadi kesalahan: ${err.message || 'Gagal memproses kode AI'}`);
@@ -600,11 +607,34 @@ export const CodingWorkspace: React.FC<CodingWorkspaceProps> = ({ currentUser })
 
   const isPreviewSupported = isWebPreviewable(activeFile.name);
 
+  // Blob URL-based Sandboxed Preview
+  const [previewBlobUrl, setPreviewBlobUrl] = useState<string>('');
+
+  useEffect(() => {
+    if (!bundledSrcDoc) {
+      setPreviewBlobUrl('');
+      return;
+    }
+    const blob = new Blob([bundledSrcDoc], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    setPreviewBlobUrl(url);
+
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [bundledSrcDoc]);
+
+  const handleOpenPreviewInNewTab = () => {
+    if (previewBlobUrl) {
+      window.open(previewBlobUrl, '_blank');
+    }
+  };
+
   return (
-    <div className="flex-1 flex flex-col h-full bg-[#080808] text-neutral-100 overflow-hidden font-['Plus_Jakarta_Sans',sans-serif]">
+    <div className="grid grid-rows-[56px_1fr] h-full w-full bg-[#080808] text-neutral-100 overflow-hidden font-['Plus_Jakarta_Sans',sans-serif]">
       
       {/* Top Coding Workspace Header & Collaboration Bar */}
-      <div className="h-14 border-b border-neutral-800 bg-[#0d0d0d] px-4 flex items-center justify-between flex-shrink-0">
+      <header className="border-b border-neutral-800 bg-[#0d0d0d] px-4 flex items-center justify-between overflow-hidden">
         
         {/* Left: Brand / Title & Model Selector */}
         <div className="flex items-center gap-3">
@@ -635,7 +665,7 @@ export const CodingWorkspace: React.FC<CodingWorkspaceProps> = ({ currentUser })
               onChange={(e) => setSelectedCodingModel(e.target.value)}
               className="bg-transparent text-neutral-200 text-xs font-mono focus:outline-none cursor-pointer"
             >
-              {LEMAI_MODELS.map((m) => (
+              {Object.values(LEMAI_MODELS).map((m) => (
                 <option key={m.id} value={m.id} className="bg-neutral-900 text-white">
                   {m.name} ({m.badge})
                 </option>
@@ -756,13 +786,13 @@ export const CodingWorkspace: React.FC<CodingWorkspaceProps> = ({ currentUser })
           </div>
 
         </div>
-      </div>
+      </header>
 
-      {/* Main Split Layout */}
-      <div className="flex-1 flex overflow-hidden relative">
+      {/* Main Split Layout: Pure CSS Grid Layout */}
+      <main className="grid grid-cols-1 md:grid-cols-[240px_minmax(0,1fr)] lg:grid-cols-[240px_minmax(0,1.2fr)_minmax(0,1fr)] h-full w-full overflow-hidden relative">
         
-        {/* Left: Files & Folders Explorer Sidebar */}
-        <div className="w-56 sm:w-64 bg-[#0a0a0a] border-r border-neutral-800 flex flex-col flex-shrink-0">
+        {/* Left: Files & Folders Explorer Sidebar Grid Item */}
+        <aside className="grid grid-rows-[auto_1fr] bg-[#0a0a0a] border-r border-neutral-800 h-full overflow-hidden">
           
           {/* Header Action Bar with Prominent Add Buttons */}
           <div className="p-3 border-b border-neutral-800 bg-[#0e0e0e] space-y-2">
@@ -999,10 +1029,10 @@ export const CodingWorkspace: React.FC<CodingWorkspaceProps> = ({ currentUser })
               })}
             </div>
           </div>
-        </div>
+        </aside>
 
-        {/* Center: Code Editor Area */}
-        <div className={`flex-1 flex flex-col bg-[#0c0c0c] min-w-0 ${mobileTab === 'editor' ? 'flex' : 'hidden md:flex'}`}>
+        {/* Center: Code Editor Area Grid Column */}
+        <section className={`grid grid-rows-[40px_auto_auto_1fr_auto] bg-[#0c0c0c] min-w-0 h-full overflow-hidden ${mobileTab === 'editor' ? 'grid' : 'hidden md:grid'}`}>
           
           {/* File Tab Bar & Live Active Collaborator Presence Banner */}
           <div className="h-10 bg-[#111111] border-b border-neutral-800 flex items-center justify-between px-4">
@@ -1057,7 +1087,7 @@ export const CodingWorkspace: React.FC<CodingWorkspaceProps> = ({ currentUser })
           </div>
 
           {/* Direct Apply Notification */}
-          {applyNotice && (
+          {applyNotice ? (
             <div className="p-2.5 bg-emerald-950/90 border-b border-emerald-800 text-emerald-200 text-xs font-mono flex items-center justify-between animate-in fade-in">
               <div className="flex items-center gap-2">
                 <Check className="w-4 h-4 text-emerald-400" />
@@ -1065,10 +1095,10 @@ export const CodingWorkspace: React.FC<CodingWorkspaceProps> = ({ currentUser })
               </div>
               <button onClick={() => setApplyNotice(null)} className="text-emerald-400 hover:text-white text-xs">✕</button>
             </div>
-          )}
+          ) : <div />}
 
           {/* Active Collaborator Cursor & Status Bar */}
-          {activeFileCollaborators.length > 0 && (
+          {activeFileCollaborators.length > 0 ? (
             <div className="px-4 py-1 bg-neutral-900/60 border-b border-neutral-800/60 flex items-center gap-3 text-[11px] font-mono text-neutral-400 overflow-x-auto">
               <span className="text-neutral-500 font-semibold flex items-center gap-1">
                 <Radio className="w-3 h-3 text-emerald-400" />
@@ -1095,10 +1125,10 @@ export const CodingWorkspace: React.FC<CodingWorkspaceProps> = ({ currentUser })
                 </div>
               ))}
             </div>
-          )}
+          ) : <div />}
 
           {/* Editable Code Editor */}
-          <div className="flex-1 relative flex overflow-hidden">
+          <div className="relative h-full overflow-hidden">
             <textarea
               ref={codeEditorRef}
               value={activeFile.content}
@@ -1106,7 +1136,7 @@ export const CodingWorkspace: React.FC<CodingWorkspaceProps> = ({ currentUser })
               onKeyUp={handleEditorCursorChange}
               onClick={handleEditorCursorChange}
               onSelect={handleEditorCursorChange}
-              className="w-full h-full bg-[#0c0c0c] text-neutral-100 p-4 font-mono text-sm leading-relaxed resize-none focus:outline-none border-0 selection:bg-neutral-700 scroll-smooth"
+              className="w-full h-full bg-[#0c0c0c] text-neutral-100 p-4 font-mono text-sm leading-relaxed resize-none focus:outline-none border-0 selection:bg-neutral-700 overflow-y-auto"
               spellCheck={false}
               autoCapitalize="none"
               autoComplete="off"
@@ -1148,11 +1178,11 @@ export const CodingWorkspace: React.FC<CodingWorkspaceProps> = ({ currentUser })
               </button>
             </div>
           </div>
-        </div>
+        </section>
 
-        {/* Right: Live Sandboxed Web Preview & AI Assistant Split */}
-        <div className={`w-full md:w-[45%] lg:w-[48%] bg-[#080808] border-l border-neutral-800 flex flex-col flex-shrink-0 ${
-          mobileTab === 'preview' || mobileTab === 'ai' ? 'flex' : 'hidden md:flex'
+        {/* Right: Live Sandboxed Web Preview & AI Assistant Split Grid Column */}
+        <section className={`grid grid-rows-[40px_1fr_auto] bg-[#080808] border-l border-neutral-800 h-full overflow-hidden ${
+          mobileTab === 'preview' || mobileTab === 'ai' ? 'grid' : 'hidden md:grid'
         }`}>
           {/* Top Bar for Preview Controls */}
           <div className="h-10 bg-[#111111] border-b border-neutral-800 px-4 flex items-center justify-between">
@@ -1184,6 +1214,13 @@ export const CodingWorkspace: React.FC<CodingWorkspaceProps> = ({ currentUser })
                 <Smartphone className="w-3.5 h-3.5" />
               </button>
               <button
+                onClick={handleOpenPreviewInNewTab}
+                className="p-1.5 rounded text-neutral-400 hover:text-white transition"
+                title="Buka Preview di Tab Baru"
+              >
+                <Share2 className="w-3.5 h-3.5" />
+              </button>
+              <button
                 onClick={() => setPreviewKey(k => k + 1)}
                 className="p-1.5 rounded text-neutral-400 hover:text-white transition"
                 title="Refresh Preview"
@@ -1193,8 +1230,8 @@ export const CodingWorkspace: React.FC<CodingWorkspaceProps> = ({ currentUser })
             </div>
           </div>
 
-          {/* Sandboxed iframe */}
-          <div className="flex-1 bg-[#050505] p-3 flex items-center justify-center overflow-auto">
+          {/* Sandboxed Blob iframe */}
+          <div className="bg-[#050505] p-3 flex items-center justify-center overflow-auto h-full">
             {isPreviewSupported ? (
               <div
                 className={`w-full h-full bg-white rounded-xl shadow-2xl overflow-hidden border border-neutral-800 transition-all ${
@@ -1207,8 +1244,8 @@ export const CodingWorkspace: React.FC<CodingWorkspaceProps> = ({ currentUser })
               >
                 <iframe
                   key={previewKey}
-                  title="LemAI Coding Preview"
-                  srcDoc={bundledSrcDoc}
+                  title="LemAI Coding Sandboxed Blob Preview"
+                  src={previewBlobUrl || 'about:blank'}
                   sandbox="allow-scripts allow-forms allow-modals allow-popups"
                   className="w-full h-full border-0 bg-white"
                 />
@@ -1255,7 +1292,7 @@ export const CodingWorkspace: React.FC<CodingWorkspaceProps> = ({ currentUser })
               </div>
             </div>
           )}
-        </div>
+        </section>
 
         {/* Live Team Pairing / Chat Drawer */}
         {isChatDrawerOpen && (
@@ -1325,7 +1362,7 @@ export const CodingWorkspace: React.FC<CodingWorkspaceProps> = ({ currentUser })
           </div>
         )}
 
-      </div>
+      </main>
 
       {/* Real-time Collaboration Manager Modal */}
       {isCollabModalOpen && (

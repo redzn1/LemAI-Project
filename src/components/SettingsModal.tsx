@@ -20,7 +20,13 @@ import {
   EyeOff,
   RefreshCw,
   Zap,
-  Shield
+  Shield,
+  Layers,
+  BrainCircuit,
+  Image as ImageIcon,
+  Video as VideoIcon,
+  Mic,
+  MessageSquare
 } from 'lucide-react';
 import { UserProfile } from '../types';
 import { LEMAI_MODELS } from '../api/api';
@@ -32,6 +38,12 @@ import {
   getTokenStatus, 
   regenerateUserAccessToken 
 } from '../lib/tokenManager';
+import {
+  getModuleModelSettings,
+  saveModuleModelSettings,
+  ModuleModelSettings,
+  DEFAULT_MODULE_MODELS
+} from '../lib/rtdb';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -72,6 +84,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [userAccessToken, setUserAccessToken] = useState('');
   const [isRegeneratingToken, setIsRegeneratingToken] = useState(false);
 
+  // Module-specific model configuration
+  const [moduleSettings, setModuleSettings] = useState<ModuleModelSettings>(DEFAULT_MODULE_MODELS);
+  const [savingModuleSettings, setSavingModuleSettings] = useState(false);
+  const [moduleSaveSuccess, setModuleSaveSuccess] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const userEmail = user?.email || 'guest@limone.my.id';
@@ -86,6 +103,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setUserAccessToken(tokenRecord.accessToken || user.accessToken || 'lemai_user_token');
     }
   }, [user]);
+
+  useEffect(() => {
+    if (isOpen) {
+      getModuleModelSettings().then((res) => {
+        setModuleSettings(res);
+      });
+    }
+  }, [isOpen]);
+
+  const handleUpdateModuleModel = (moduleKey: keyof ModuleModelSettings, modelVal: string) => {
+    const updated = {
+      ...moduleSettings,
+      [moduleKey]: modelVal,
+    };
+    setModuleSettings(updated);
+  };
+
+  const handleSaveModuleSettings = async () => {
+    soundEffects.playClickPop();
+    setSavingModuleSettings(true);
+    setModuleSaveSuccess(false);
+    try {
+      await saveModuleModelSettings(moduleSettings);
+      setModuleSaveSuccess(true);
+      setTimeout(() => setModuleSaveSuccess(false), 2500);
+    } finally {
+      setSavingModuleSettings(false);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -459,10 +505,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             {/* TAB: MODELS */}
             {activeTab === 'models' && (
-              <div className="space-y-5">
+              <div className="space-y-6">
                 <div>
                   <h3 className="text-sm font-semibold text-white mb-1">Active Model Architecture</h3>
-                  <p className="text-xs text-neutral-400">Configure default intelligence engine for new chats and coding</p>
+                  <p className="text-xs text-neutral-400">Pilih mesin default dan sesuaikan routing model untuk setiap modul AI</p>
                 </div>
 
                 {profileError && (
@@ -471,7 +517,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 )}
 
+                {/* Global Default Model Selection */}
                 <div className="space-y-2.5">
+                  <div className="text-xs font-bold text-neutral-300 uppercase tracking-wider font-mono">
+                    Global Default Model
+                  </div>
                   {Object.values(LEMAI_MODELS).map((m) => {
                     const isUnavailable = m.id === 'lemai-1.1-pro' || m.enabled === false || m.isAvailable === false;
                     return (
@@ -510,6 +560,137 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       </div>
                     );
                   })}
+                </div>
+
+                {/* Module-Specific Model Routing Matrix */}
+                <div className="p-4 bg-[#141414] border border-neutral-800 rounded-2xl space-y-4">
+                  <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
+                    <div className="flex items-center gap-2">
+                      <Layers className="w-4 h-4 text-amber-400" />
+                      <h4 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
+                        Module-Specific Model Routing
+                      </h4>
+                    </div>
+                    {moduleSaveSuccess && (
+                      <span className="text-[11px] text-emerald-400 font-mono flex items-center gap-1 animate-in fade-in">
+                        <Check className="w-3 h-3" /> Tersimpan ke RTDB!
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    {/* Chat Module */}
+                    <div className="p-3 bg-[#0f0f0f] border border-neutral-800/90 rounded-xl space-y-1.5">
+                      <label className="text-[11px] font-mono text-neutral-400 flex items-center gap-1.5 font-bold">
+                        <MessageSquare className="w-3.5 h-3.5 text-blue-400" />
+                        Chat Engine
+                      </label>
+                      <select
+                        value={moduleSettings.chatModel}
+                        onChange={(e) => handleUpdateModuleModel('chatModel', e.target.value)}
+                        className="w-full bg-[#181818] border border-neutral-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono focus:outline-none"
+                      >
+                        <option value="lemai-1.0-flash">LemAI 1.0 Flash (Default)</option>
+                        <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                        <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                      </select>
+                    </div>
+
+                    {/* Coding IDE Module */}
+                    <div className="p-3 bg-[#0f0f0f] border border-neutral-800/90 rounded-xl space-y-1.5">
+                      <label className="text-[11px] font-mono text-neutral-400 flex items-center gap-1.5 font-bold">
+                        <Code className="w-3.5 h-3.5 text-emerald-400" />
+                        Coding Workspace
+                      </label>
+                      <select
+                        value={moduleSettings.codingModel}
+                        onChange={(e) => handleUpdateModuleModel('codingModel', e.target.value)}
+                        className="w-full bg-[#181818] border border-neutral-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono focus:outline-none"
+                      >
+                        <option value="lemai-1.0-flash">LemAI 1.0 Flash</option>
+                        <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                        <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                      </select>
+                    </div>
+
+                    {/* Reasoning Module */}
+                    <div className="p-3 bg-[#0f0f0f] border border-neutral-800/90 rounded-xl space-y-1.5">
+                      <label className="text-[11px] font-mono text-neutral-400 flex items-center gap-1.5 font-bold">
+                        <BrainCircuit className="w-3.5 h-3.5 text-purple-400" />
+                        Deep Reasoning & Research
+                      </label>
+                      <select
+                        value={moduleSettings.reasoningModel}
+                        onChange={(e) => handleUpdateModuleModel('reasoningModel', e.target.value)}
+                        className="w-full bg-[#181818] border border-neutral-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono focus:outline-none"
+                      >
+                        <option value="gemini-2.5-pro">Gemini 2.5 Pro (Thinking)</option>
+                        <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                        <option value="lemai-1.0-flash">LemAI 1.0 Flash</option>
+                      </select>
+                    </div>
+
+                    {/* Vision Module */}
+                    <div className="p-3 bg-[#0f0f0f] border border-neutral-800/90 rounded-xl space-y-1.5">
+                      <label className="text-[11px] font-mono text-neutral-400 flex items-center gap-1.5 font-bold">
+                        <Camera className="w-3.5 h-3.5 text-pink-400" />
+                        Vision & Multimodal
+                      </label>
+                      <select
+                        value={moduleSettings.visionModel}
+                        onChange={(e) => handleUpdateModuleModel('visionModel', e.target.value)}
+                        className="w-full bg-[#181818] border border-neutral-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono focus:outline-none"
+                      >
+                        <option value="lemai-1.0-flash">LemAI 1.0 Flash</option>
+                        <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                        <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                      </select>
+                    </div>
+
+                    {/* Image Generation */}
+                    <div className="p-3 bg-[#0f0f0f] border border-neutral-800/90 rounded-xl space-y-1.5">
+                      <label className="text-[11px] font-mono text-neutral-400 flex items-center gap-1.5 font-bold">
+                        <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
+                        Image Generation Engine
+                      </label>
+                      <select
+                        value={moduleSettings.imageModel}
+                        onChange={(e) => handleUpdateModuleModel('imageModel', e.target.value)}
+                        className="w-full bg-[#181818] border border-neutral-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono focus:outline-none"
+                      >
+                        <option value="imagen-3.0-generate-002">Imagen 3 (imagen-3.0-generate-002)</option>
+                        <option value="imagen-3.0-fast">Imagen 3 Fast</option>
+                      </select>
+                    </div>
+
+                    {/* Speech / Audio */}
+                    <div className="p-3 bg-[#0f0f0f] border border-neutral-800/90 rounded-xl space-y-1.5">
+                      <label className="text-[11px] font-mono text-neutral-400 flex items-center gap-1.5 font-bold">
+                        <Mic className="w-3.5 h-3.5 text-cyan-400" />
+                        Audio & Speech Engine
+                      </label>
+                      <select
+                        value={moduleSettings.speechModel}
+                        onChange={(e) => handleUpdateModuleModel('speechModel', e.target.value)}
+                        className="w-full bg-[#181818] border border-neutral-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono focus:outline-none"
+                      >
+                        <option value="speech-synthesis-v2">Web Audio Synthesis V2</option>
+                        <option value="gemini-2.5-flash">Gemini 2.5 Native Audio</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={handleSaveModuleSettings}
+                      disabled={savingModuleSettings}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 shadow"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      <span>{savingModuleSettings ? 'Menyimpan...' : 'Simpan Konfigurasi Modul'}</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             )}

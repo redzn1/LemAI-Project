@@ -1,22 +1,69 @@
-import React from 'react';
+import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { Download, Eye, Maximize2 } from 'lucide-react';
 import { CodeBlock } from './CodeBlock';
+import { ImagePreviewModal } from './ImagePreviewModal';
 
 interface MarkdownRendererProps {
   content: string;
   onCodeAction?: (action: 'explain' | 'fix' | 'improve', code: string, language: string) => void;
+  onPreviewImage?: (url: string, alt?: string) => void;
 }
 
 export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   content,
   onCodeAction,
+  onPreviewImage,
 }) => {
+  const [modalImage, setModalImage] = useState<{ url: string; alt?: string } | null>(null);
+
+  const handleImageClick = (src: string, alt?: string) => {
+    if (onPreviewImage) {
+      onPreviewImage(src, alt);
+    } else {
+      setModalImage({ url: src, alt });
+    }
+  };
+
   return (
     <div className="prose prose-invert max-w-none text-neutral-200 text-[15px] leading-relaxed space-y-4 font-normal">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
+          // Images with interactive preview and instant download
+          img({ src, alt }) {
+            if (!src) return null;
+            return (
+              <div className="my-4 not-prose inline-block max-w-full">
+                <div 
+                  className="group relative rounded-2xl overflow-hidden border border-neutral-800 bg-[#121212] transition-all hover:border-neutral-700 shadow-xl inline-block"
+                >
+                  <img
+                    src={src}
+                    alt={alt || 'LemAI Image'}
+                    className="max-h-[420px] max-w-full object-contain rounded-2xl select-none cursor-pointer"
+                    onClick={() => handleImageClick(src, alt)}
+                    loading="lazy"
+                  />
+                  
+                  {/* Hover Overlay Toolbar */}
+                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2 pointer-events-none group-hover:pointer-events-auto backdrop-blur-xs">
+                    <button
+                      type="button"
+                      onClick={() => handleImageClick(src, alt)}
+                      className="px-3 py-1.5 rounded-xl bg-white/90 hover:bg-white text-black text-xs font-bold transition flex items-center gap-1.5 shadow-lg active:scale-95"
+                    >
+                      <Maximize2 className="w-3.5 h-3.5" />
+                      <span>Preview & Download</span>
+                    </button>
+                  </div>
+                </div>
+                {alt && <p className="text-[11px] font-mono text-neutral-400 mt-1.5 pl-1">{alt}</p>}
+              </div>
+            );
+          },
+
           // Code block vs inline code
           code({ node, className, children, ...props }: any) {
             const match = /language-(\w+)/.exec(className || '');
@@ -132,6 +179,16 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
       >
         {content}
       </ReactMarkdown>
+
+      {modalImage && (
+        <ImagePreviewModal
+          isOpen={true}
+          onClose={() => setModalImage(null)}
+          imageUrl={modalImage.url}
+          altText={modalImage.alt}
+          title={modalImage.alt || 'Gambar Pratinjau'}
+        />
+      )}
     </div>
   );
 };

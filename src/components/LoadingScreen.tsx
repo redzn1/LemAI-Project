@@ -19,7 +19,7 @@ const loadingSteps = [
 
 export const LoadingScreen: React.FC<LoadingScreenProps> = ({
   onComplete,
-  minDurationMs = 5000,
+  minDurationMs = 3500,
   statusMessage,
   isComplete = false,
 }) => {
@@ -30,8 +30,10 @@ export const LoadingScreen: React.FC<LoadingScreenProps> = ({
 
   useEffect(() => {
     const startTime = Date.now();
-    const intervalTime = 40;
-    const targetDuration = Math.max(minDurationMs, 5000);
+    const intervalTime = 35;
+    const targetDuration = Math.max(minDurationMs, 2500);
+    let exitTimeout: any = null;
+    let finishTimeout: any = null;
 
     const timer = setInterval(() => {
       const elapsed = Date.now() - startTime;
@@ -55,17 +57,27 @@ export const LoadingScreen: React.FC<LoadingScreenProps> = ({
         setProgress(100);
         setCurrentStepIndex(loadingSteps.length - 1);
         
-        setTimeout(() => {
+        exitTimeout = setTimeout(() => {
           setIsExiting(true);
-          setTimeout(() => {
+          finishTimeout = setTimeout(() => {
             if (onComplete) onComplete();
-          }, 450);
-        }, 300);
+          }, 350);
+        }, 200);
       }
     }, intervalTime);
 
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      if (exitTimeout) clearTimeout(exitTimeout);
+      if (finishTimeout) clearTimeout(finishTimeout);
+    };
   }, [minDurationMs, onComplete]);
+
+  const handleSkip = () => {
+    setIsExiting(true);
+    if (onComplete) onComplete();
+  };
+
 
   return (
     <AnimatePresence>
@@ -199,23 +211,28 @@ export const LoadingScreen: React.FC<LoadingScreenProps> = ({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: 0.35, duration: 0.4 }}
-              className="flex items-center justify-center gap-3 pt-2 border-t border-neutral-900 text-[10px] font-mono text-neutral-500"
+              className="flex items-center justify-between w-full pt-2 border-t border-neutral-900 text-[10px] font-mono text-neutral-500"
             >
-              <span className="flex items-center gap-1">
-                <Shield className="w-3 h-3 text-neutral-400" />
-                Firebase Auth
-              </span>
-              <span>•</span>
-              <span className="flex items-center gap-1">
-                <Cpu className="w-3 h-3 text-neutral-400" />
-                3-Model Engine
-              </span>
-              <span>•</span>
-              <span className="flex items-center gap-1">
-                <Terminal className="w-3 h-3 text-neutral-400" />
-                IDE Ready
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="flex items-center gap-1">
+                  <Shield className="w-3 h-3 text-neutral-400" />
+                  Firebase Auth
+                </span>
+                <span>•</span>
+                <span className="flex items-center gap-1">
+                  <Terminal className="w-3 h-3 text-neutral-400" />
+                  IDE Ready
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleSkip}
+                className="text-neutral-400 hover:text-white px-2 py-0.5 rounded bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 transition text-[10px]"
+              >
+                Skip ➔
+              </button>
             </motion.div>
+
 
           </div>
         </motion.div>

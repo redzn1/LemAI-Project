@@ -79,7 +79,7 @@ const DEFAULT_CHANGELOGS: VersionChangelog[] = [
       {
         id: 'item-1',
         title: 'Sistem Module Resmi (Gemini-Style Architecture)',
-        description: 'Integrasi modul sistem fleksibel langsung di chat: Buat Gambar, Buat Video, Canvas Sandbox, dan Rezearch Grounding.',
+        description: 'Integrasi modul sistem fleksibel langsung di chat: Buat Gambar, Buat Video, Canvas Sandbox, dan Research Grounding.',
         iconType: 'sparkles',
       },
       {
@@ -149,7 +149,7 @@ const DEFAULT_CHANGELOGS: VersionChangelog[] = [
       {
         id: 'item-20-2',
         title: 'Module System Tray',
-        description: 'Antarmuka cepat untuk Image Studio, Video Concepts, Deep Rezearch, dan Coding Canvas.',
+        description: 'Antarmuka cepat untuk Image Studio, Video Concepts, Deep Research, dan Coding Canvas.',
         iconType: 'check',
       },
     ],

@@ -812,6 +812,75 @@ export function adminRemoveDevRoleByToken(
   }
 }
 
+// Module Model Settings Interface
+export interface ModuleModelSettings {
+  chatModel: string;
+  codingModel: string;
+  reasoningModel: string;
+  visionModel: string;
+  imageModel: string;
+  videoModel: string;
+}
+
+const STORAGE_KEY_MODULE_SETTINGS = 'lemai_module_model_settings_v1';
+
+export async function getModuleModelSettings(): Promise<ModuleModelSettings> {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY_MODULE_SETTINGS);
+    if (saved) {
+      return JSON.parse(saved);
+    }
+  } catch (e) {
+    console.error('Error loading module model settings:', e);
+  }
+  return {
+    chatModel: 'lemai-1.0-flash',
+    codingModel: 'lemai-1.0-flash',
+    reasoningModel: 'gemini-2.5-pro',
+    visionModel: 'lemai-1.0-flash',
+    imageModel: 'imagen-3.0-generate-002',
+    videoModel: 'veo-2.0-generate-001',
+  };
+}
+
+export async function saveModuleModelSettings(settings: ModuleModelSettings): Promise<void> {
+  try {
+    localStorage.setItem(STORAGE_KEY_MODULE_SETTINGS, JSON.stringify(settings));
+  } catch (e) {
+    console.error('Error saving module model settings:', e);
+  }
+}
+
+export async function updateUserProfileData(data: {
+  displayName?: string;
+  bio?: string;
+  photoURL?: string;
+  username?: string;
+}): Promise<UserProfile> {
+  const currentEmail = localStorage.getItem('lemai_current_user_email') || 'developer@limone.my.id';
+  const tokenRecord = getUserTokenRecord(currentEmail, data.username);
+  
+  const updatedUser: UserProfile = {
+    uid: 'user-' + Date.now(),
+    email: tokenRecord.email || currentEmail,
+    username: data.username || tokenRecord.username || 'Developer',
+    displayName: data.displayName || data.username || 'Developer',
+    bio: data.bio || '',
+    photoURL: data.photoURL,
+    role: tokenRecord.role,
+    accessToken: tokenRecord.accessToken,
+    provider: 'password',
+  };
+
+  try {
+    localStorage.setItem('lemai_user_profile_data', JSON.stringify(updatedUser));
+  } catch (e) {
+    console.error('Error saving user profile data:', e);
+  }
+
+  return updatedUser;
+}
+
 // Backward-compatible alias exports
 export const adminAddToken = adminAddTokenByToken;
 export const adminReduceToken = adminReduceTokenByToken;

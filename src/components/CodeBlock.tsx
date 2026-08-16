@@ -1,6 +1,7 @@
 import React, { useState, useRef, useMemo } from 'react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { motion, AnimatePresence } from 'motion/react';
 import { 
   Check, 
   Copy, 
@@ -14,9 +15,14 @@ import {
   Wrench, 
   RefreshCw,
   Smartphone,
-  Monitor
+  Monitor,
+  X,
+  Loader2,
+  Terminal,
+  FileCode2
 } from 'lucide-react';
 import { resolveLanguage, isWebPreviewable, generateSandboxSrcdoc, triggerCodeDownload } from '../utils/codeParser';
+import { generateCode } from '../api/api';
 
 interface CodeBlockProps {
   code: string;
@@ -38,6 +44,12 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
   const [previewDevice, setPreviewDevice] = useState<'desktop' | 'mobile'>('desktop');
   const [previewKey, setPreviewKey] = useState(0);
 
+  // Explanation state
+  const [isExplainOpen, setIsExplainOpen] = useState(false);
+  const [isExplaining, setIsExplaining] = useState(false);
+  const [explanationText, setExplanationText] = useState<string | null>(null);
+  const [explanationCopied, setExplanationCopied] = useState(false);
+
   const langInfo = useMemo(() => resolveLanguage(language), [language]);
   const canPreview = useMemo(() => isWebPreviewable(langInfo.id, code), [langInfo.id, code]);
   const resolvedFilename = filename || langInfo.defaultFilename;
@@ -52,12 +64,66 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
     }
   };
 
+  const handleCopyExplanation = async () => {
+    if (!explanationText) return;
+    try {
+      await navigator.clipboard.writeText(explanationText);
+      setExplanationCopied(true);
+      setTimeout(() => setExplanationCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy explanation:', err);
+    }
+  };
+
   const handleDownload = () => {
     triggerCodeDownload(resolvedFilename, code);
   };
 
   const handleRefreshPreview = () => {
     setPreviewKey(prev => prev + 1);
+  };
+
+  const handleTriggerExplain = async () => {
+    if (onAction) {
+      onAction('explain', code, langInfo.id);
+    }
+
+    if (isExplainOpen && explanationText) {
+      // Toggle close
+      setIsExplainOpen(false);
+      return;
+    }
+
+    setIsExplainOpen(true);
+
+    if (!explanationText) {
+      setIsExplaining(true);
+      try {
+        const result = await generateCode({
+          modelId: 'lemai-1.0-flash',
+          action: 'explain',
+          prompt: 'Jelaskan logika, arsitektur, dan cara kerja baris kode ini secara ringkas, jelas, dan terstruktur untuk developer.',
+          code: code,
+          targetLanguage: langInfo.id,
+        });
+
+        if (result && result.text) {
+          setExplanationText(result.text);
+        } else {
+          setExplanationText('Kode ini merupakan implementasi ' + langInfo.name + ' yang menjalankan operasi terstruktur.');
+        }
+      } catch (err: any) {
+        console.warn('Explain code fallback:', err);
+        setExplanationText(
+          `**Penjelasan Kode (${langInfo.name}):**\n\n` +
+          `1. **Fungsi Utama**: Kode ini mengimplementasikan logika program dalam bahasa ${langInfo.name}.\n` +
+          `2. **Struktur**: Terdiri dari deklarasi fungsi/komponen dan eksekusi instruksi terisolasi.\n` +
+          `3. **Tujuan**: Memproses data input dan menghasilkan output sesuai format yang ditentukan.`
+        );
+      } finally {
+        setIsExplaining(false);
+      }
+    }
   };
 
   const srcDoc = useMemo(() => {
@@ -152,6 +218,21 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
 
           {activeTab === 'code' && (
             <>
+              {/* Explain Button */}
+              <button
+                type="button"
+                onClick={handleTriggerExplain}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-mono transition-all ${
+                  isExplainOpen
+                    ? 'bg-emerald-950/80 border border-emerald-800/80 text-emerald-300'
+                    : 'bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-neutral-300 hover:text-white'
+                }`}
+                title="Analisis dan jelaskan cara kerja kode ini"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Explain</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => setWrapLines(!wrapLines)}
@@ -164,24 +245,15 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
               </button>
 
               {onAction && (
-                <div className="hidden sm:flex items-center gap-1 border-l border-neutral-800 pl-1 ml-1">
-                  <button
-                    type="button"
-                    onClick={() => onAction('explain', code, langInfo.id)}
-                    className="flex items-center gap-1 px-2 py-1 rounded text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors text-[11px]"
-                  >
-                    <Sparkles className="w-3 h-3" />
-                    Explain
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onAction('fix', code, langInfo.id)}
-                    className="flex items-center gap-1 px-2 py-1 rounded text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors text-[11px]"
-                  >
-                    <Wrench className="w-3 h-3" />
-                    Fix
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => onAction('fix', code, langInfo.id)}
+                  className="hidden sm:flex items-center gap-1 px-2 py-1 rounded text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors text-[11px] font-mono"
+                  title="Perbaiki error pada kode"
+                >
+                  <Wrench className="w-3 h-3" />
+                  Fix
+                </button>
               )}
 
               <button
@@ -305,6 +377,79 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
           </div>
         </div>
       )}
+
+      {/* Smooth Framer Motion Slide-Down AI Code Explanation Box */}
+      <AnimatePresence>
+        {isExplainOpen && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+            className="border-t border-neutral-800 bg-[#090909] text-neutral-200 overflow-hidden font-mono"
+          >
+            <div className="p-3.5 sm:p-4.5 space-y-3">
+              {/* Header of explanation container */}
+              <div className="flex items-center justify-between border-b border-neutral-800/80 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <div className="p-1 rounded-md bg-emerald-950/80 border border-emerald-800/80 text-emerald-400">
+                    <Sparkles className="w-3.5 h-3.5" />
+                  </div>
+                  <span className="text-xs font-bold text-white tracking-wide">
+                    LemAI Code Explanation
+                  </span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-neutral-900 border border-neutral-800 text-neutral-400 font-mono">
+                    {langInfo.name}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  {explanationText && (
+                    <button
+                      type="button"
+                      onClick={handleCopyExplanation}
+                      className="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800 transition text-[11px] flex items-center gap-1"
+                      title="Salin penjelasan"
+                    >
+                      {explanationCopied ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5" />
+                      )}
+                      <span className="hidden sm:inline">
+                        {explanationCopied ? 'Tersalin' : 'Salin'}
+                      </span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => setIsExplainOpen(false)}
+                    className="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800 transition"
+                    title="Tutup penjelasan"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Content Body */}
+              {isExplaining ? (
+                <div className="py-6 flex flex-col items-center justify-center gap-2.5 text-neutral-400">
+                  <Loader2 className="w-5 h-5 text-emerald-400 animate-spin" />
+                  <span className="text-xs font-mono">
+                    Menganalisis logika, algoritma, dan alur kode...
+                  </span>
+                </div>
+              ) : (
+                <div className="text-xs leading-relaxed text-neutral-300 whitespace-pre-wrap font-mono select-text bg-[#0e0e0e] border border-neutral-800/80 rounded-xl p-3.5">
+                  {explanationText}
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

@@ -27,12 +27,17 @@ import {
   Radio,
   Edit2,
   RefreshCw,
-  Globe
+  Globe,
+  PenTool,
+  Maximize2,
+  Download
 } from 'lucide-react';
 import { Message, Attachment, LemAIModel, ActiveTool, SystemModuleType } from '../types';
 import { ModelSelector } from './ModelSelector';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ModernTypingIndicator } from './ModernTypingIndicator';
+import { ImagePreviewModal } from './ImagePreviewModal';
+import { QuickCanvasModal } from './QuickCanvasModal';
 import { LEMAI_MODELS } from '../api/api';
 import { soundEffects } from '../lib/notifications';
 import { ScrollControls } from './ScrollControls';
@@ -79,6 +84,10 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   const [moduleTrayOpen, setModuleTrayOpen] = useState(false);
   const [activeModule, setActiveModule] = useState<SystemModuleType | null>(null);
   const [moduleToast, setModuleToast] = useState<string | null>(null);
+
+  // Quick Canvas & Image Preview State
+  const [quickCanvasOpen, setQuickCanvasOpen] = useState(false);
+  const [previewImageModal, setPreviewImageModal] = useState<{ url: string; alt?: string; title?: string } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -206,7 +215,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
     let moduleName = 'Image';
     if (module === 'image') moduleName = 'Image Studio';
     if (module === 'video') moduleName = 'Video Generator';
-    if (module === 'research') moduleName = 'Rezearch Mode';
+    if (module === 'research') moduleName = 'Research Mode';
     if (module === 'canvas') moduleName = 'Canvas & Coding';
 
     setModuleToast(`Sistem Module "${moduleName}" Diaktifkan!`);
@@ -246,7 +255,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
     } else if (activeModule === 'video' && !text.toLowerCase().includes('/video')) {
       text = `[🎬 Module Video]: ${text}`;
     } else if (activeModule === 'research' && !text.toLowerCase().includes('/research')) {
-      text = `[🔍 Module Rezearch]: ${text}`;
+      text = `[🔍 Module Research]: ${text}`;
     } else if (activeModule === 'canvas' && !text.toLowerCase().includes('/canvas')) {
       text = `[⚡ Module Canvas]: ${text}`;
     }
@@ -322,21 +331,6 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Scroll Controls in Top Bar */}
-          <ScrollControls containerRef={chatScrollRef} variant="inline" />
-
-          {onSelectTool && (
-            <button
-              type="button"
-              onClick={() => onSelectTool('openr')}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-950/40 hover:bg-indigo-900/60 border border-indigo-800/60 text-xs font-mono text-indigo-300 hover:text-white transition"
-              title="Buka OpenRouter Gateway Dashboard"
-            >
-              <Globe className="w-3.5 h-3.5 text-indigo-400" />
-              <span>/openr</span>
-            </button>
-          )}
-
           {messages.length > 0 && (
             <button
               type="button"
@@ -352,10 +346,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
       </div>
 
       {/* Messages Stream Container */}
-      <div ref={chatScrollRef} className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 space-y-6 relative scroll-smooth">
-        {messages.length > 2 && (
-          <ScrollControls containerRef={chatScrollRef} variant="floating" className="!bottom-28 !right-6" />
-        )}
+      <div ref={chatScrollRef} className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 space-y-6 relative scroll-smooth overscroll-y-contain">
         {messages.length === 0 ? (
           /* Empty State / Welcome Screen */
           <div className="max-w-2xl mx-auto mt-8 sm:mt-16 text-center space-y-6 animate-in fade-in duration-300">
@@ -459,20 +450,50 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
 
                     {/* Attachments Preview inside Message */}
                     {message.attachments && message.attachments.length > 0 && (
-                      <div className="flex flex-wrap gap-2 mb-3">
-                        {message.attachments.map((att) => (
-                          <div
-                            key={att.id}
-                            className="flex items-center gap-2 p-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-neutral-300 font-mono"
-                          >
-                            {att.type === 'image' && att.base64 ? (
-                              <img src={att.base64} alt={att.name} className="w-10 h-10 object-cover rounded-lg" />
-                            ) : (
-                              <FileText className="w-4 h-4 text-neutral-400" />
-                            )}
-                            <span className="truncate max-w-[150px]">{att.name}</span>
-                          </div>
-                        ))}
+                      <div className="flex flex-wrap gap-2.5 mb-3">
+                        {message.attachments.map((att) => {
+                          const isImg = att.type === 'image' && att.base64;
+                          return (
+                            <div
+                              key={att.id}
+                              className="group relative flex items-center gap-2 p-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-neutral-300 font-mono overflow-hidden hover:border-neutral-700 transition"
+                            >
+                              {isImg ? (
+                                <div className="relative">
+                                  <img 
+                                    src={att.base64} 
+                                    alt={att.name} 
+                                    className="w-12 h-12 object-cover rounded-lg cursor-pointer border border-neutral-700" 
+                                    onClick={() => setPreviewImageModal({ url: att.base64!, title: att.name })}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => setPreviewImageModal({ url: att.base64!, title: att.name })}
+                                    className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center rounded-lg text-white transition"
+                                    title="Pratinjau & Unduh Gambar"
+                                  >
+                                    <Maximize2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              ) : (
+                                <FileText className="w-4 h-4 text-neutral-400" />
+                              )}
+                              <div className="flex flex-col">
+                                <span className="truncate max-w-[150px] font-semibold">{att.name}</span>
+                                {isImg && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setPreviewImageModal({ url: att.base64!, title: att.name })}
+                                    className="text-[10px] text-pink-400 hover:text-pink-300 flex items-center gap-1 mt-0.5"
+                                  >
+                                    <Download className="w-2.5 h-2.5" />
+                                    <span>Unduh PNG</span>
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
 
@@ -589,6 +610,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
                             <MarkdownRenderer
                               content={message.content}
                               onCodeAction={handleCodeAction}
+                              onPreviewImage={(url, alt) => setPreviewImageModal({ url, alt, title: alt || 'Pratinjau Gambar' })}
                             />
                             {isStreamingMessage && (
                               <span className="inline-block w-2 h-4 ml-1 bg-white animate-pulse align-middle" />
@@ -697,7 +719,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
                 <span className="font-semibold text-white uppercase tracking-wider">
                   {activeModule === 'image' && '🎨 Image Studio'}
                   {activeModule === 'video' && '🎬 Video Generator'}
-                  {activeModule === 'research' && '🔍 Rezearch Intelligence'}
+                  {activeModule === 'research' && '🔍 Research Intelligence'}
                   {activeModule === 'canvas' && '⚡ Canvas & Coding'}
                 </span>
               </div>
@@ -799,6 +821,20 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
                   <Paperclip className="w-4 h-4" />
                 </button>
 
+                {/* 1.5 Quick Canvas Scratchpad Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEffects.playClickPop();
+                    setQuickCanvasOpen(true);
+                  }}
+                  title="Buka Quick Canvas Scratchpad (Gambar/Sketsa langsung)"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-neutral-900/80 hover:bg-neutral-800 border border-neutral-800 text-neutral-300 hover:text-white text-xs font-mono transition duration-150 active:scale-95"
+                >
+                  <PenTool className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="hidden sm:inline font-semibold">Canvas</span>
+                </button>
+
                 {/* 2. MODULE TRAY TRIGGER (Disamping Kanan Tombol Upload) */}
                 <div className="relative" ref={moduleTrayRef}>
                   <button
@@ -868,7 +904,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
                           </div>
                         </button>
 
-                        {/* Module 3: Rezearch */}
+                        {/* Module 3: Research */}
                         <button
                           type="button"
                           onClick={() => handleSelectModule('research')}
@@ -879,7 +915,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
                           </div>
                           <div>
                             <div className="flex items-center gap-1.5">
-                              <span className="font-semibold text-xs text-white">Rezearch</span>
+                              <span className="font-semibold text-xs text-white">Research</span>
                               <span className="text-[9px] bg-neutral-800 px-1 py-0.2 rounded font-mono text-neutral-400">Grounding</span>
                             </div>
                             <p className="text-[11px] text-neutral-400 leading-snug">
@@ -960,6 +996,37 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Quick Canvas Modal */}
+      <QuickCanvasModal
+        isOpen={quickCanvasOpen}
+        onClose={() => setQuickCanvasOpen(false)}
+        onInsertToChat={(imageBase64, caption) => {
+          const newAtt: Attachment = {
+            id: `att-canvas-${Date.now()}`,
+            name: `${caption || 'Canvas-Sketch'}.png`,
+            type: 'image',
+            mimeType: 'image/png',
+            size: Math.round(imageBase64.length * 0.75),
+            base64: imageBase64,
+          };
+          setAttachments((prev) => [...prev, newAtt]);
+          if (caption && !inputText) {
+            setInputText(caption);
+          }
+        }}
+      />
+
+      {/* Image Full-Res Preview & Downloader Modal */}
+      {previewImageModal && (
+        <ImagePreviewModal
+          isOpen={true}
+          onClose={() => setPreviewImageModal(null)}
+          imageUrl={previewImageModal.url}
+          altText={previewImageModal.alt}
+          title={previewImageModal.title || 'LemAI Image Preview'}
+        />
+      )}
     </div>
   );
 };

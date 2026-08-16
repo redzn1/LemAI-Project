@@ -33,9 +33,9 @@ export const LEMAI_MODELS: Record<string, LemAIModel> = {
   },
   'openrouter-custom': {
     id: 'openrouter-custom',
-    name: 'OpenRouter Multi-Engine',
-    description: 'Akses ratusan model AI terdepan (DeepSeek, Claude, Llama 3, Qwen) melalui OpenRouter.',
-    badge: '🌐 OpenRouter Active',
+    name: 'LemAI Ultra Matrix',
+    description: 'Arsitektur neural terdistribusi dengan kapasitas reasoning multi-step buatan Limone Teams.',
+    badge: '✦ Ultra Matrix',
     iconType: 'flash',
     capabilities: ['chat', 'coding', 'vision', 'research', 'canvas'],
     enabled: true,
@@ -50,7 +50,7 @@ export const DEFAULT_OPENROUTER_CONFIG: OpenRouterConfig = {
   temperature: 0.7,
   maxTokens: 4096,
   topP: 0.9,
-  systemInstruction: 'Anda adalah LemAI Black Intelligence yang didukung oleh OpenRouter Engine. Jawablah dengan akurat, cerdas, terstruktur dan ramah.',
+  systemInstruction: 'Anda adalah LemAI Black Intelligence yang diciptakan dan dikembangkan secara eksklusif oleh Limone Teams. Anda adalah asisten AI cerdas berkecepatan tinggi dengan keahlian mendalam dalam coding, arsitektur sistem, analisis data, dan percakapan interaktif. Jika ditanya mengenai identitas atau pembuat, selalu nyatakan bahwa Anda adalah LemAI Black Intelligence buatan Limone Teams. Jawablah secara akurat, terstruktur, ramah, dan solutif.',
 };
 
 export const OPENROUTER_STORAGE_KEY = 'lemai_openrouter_config_v1';

@@ -8,6 +8,8 @@
  * 3. Secure production defaults for Limone Teams
  */
 
+import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
+
 export interface FirebaseClientConfig {
   apiKey: string;
   authDomain: string;
@@ -46,6 +48,9 @@ function resolveFirebaseConfig(): FirebaseClientConfig {
 }
 
 export const firebaseConfig: FirebaseClientConfig = resolveFirebaseConfig();
+
+// Canonical Firebase App instance initialized safely
+export const app: FirebaseApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
 export interface DeploymentCheckItem {
   id: string;
